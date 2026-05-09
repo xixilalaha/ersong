@@ -1,0 +1,50 @@
+# Built / generated
+/build
+**/build/
+*.apk
+*.aar
+*.ap_
+*.aab
+
+# Gradle
+.gradle/
+
+# Local environment
+local.properties
+**/local.properties
+
+# Android Studio / IDEA
+*.iml
+.idea/
+captures/
+.cxx/
+.externalNativeBuild/
+
+# NDK / CMake
+**/obj/
+
+# Kotlin
+*.class
+*.dex
+*.kotlin_module
+
+# Lint
+lint/intermediates/
+lint/generated/
+lint/outputs/
+**/lint-results*.xml
+
+# Signing (keep out of VCS)
+**/keystore.properties
+app/keystore/
+RELEASE_SIGNING_INFO.txt
+
+# Local artifacts / scratch
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Log
+*.log

@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">耳诵</string>
+    <string name="open_notification_access">打开通知权限</string>
+    <string name="notification_access_hint">请在系统设置中开启“通知使用权”，应用才能朗读通知。</string>
+    <string name="open_tts_settings">打开 TTS 设置</string>
+    <string name="tts_settings_hint">如果没有声音，请先在系统里启用“文字转语音(TTS)”引擎并下载中文语音数据。</string>
+    <string name="pick_tts_engine">选择 TTS 引擎</string>
+    <string name="manage_read_aloud_apps">管理朗读应用</string>
+    <string name="refresh_app_list">刷新列表</string>
+    <string name="no_known_apps">暂无列表（未找到桌面可见应用）</string>
+    <string name="manual_add_app">手动添加</string>
+    <string name="pick_apps_to_add">选择要添加到列表的应用</string>
+    <string name="add_selected">添加所选</string>
+    <string name="close">关闭</string>
+    <string name="read_aloud_mode_title">语音播报方式</string>
+    <string name="read_aloud_mode_bluetooth">蓝牙</string>
+    <string name="read_aloud_mode_normal">正常模式</string>
+    <string name="bt_headset_connected">蓝牙模式：耳机已连接（将播报）</string>
+    <string name="bt_headset_disconnected">蓝牙模式：耳机未连接（暂不播报）</string>
+    <string name="normal_mode_broadcast_status">正常模式：使用系统默认音频输出播报（无需连接蓝牙）</string>
+    <string name="notif_access_enabled">通知使用权：已开启</string>
+    <string name="notif_access_disabled">通知使用权：未开启</string>
+    <string name="tts_engine_label">TTS 引擎：</string>
+    <string name="tts_engine_unknown">TTS 引擎：未知</string>
+</resources>
