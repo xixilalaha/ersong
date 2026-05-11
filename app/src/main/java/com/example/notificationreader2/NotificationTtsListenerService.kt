@@ -44,15 +44,25 @@ class NotificationTtsListenerService : NotificationListenerService() {
         if (sbn.packageName == packageName) return
 
         val pkg = sbn.packageName
+        Log.d(
+            TAG,
+            "posted raw pkg=$pkg id=${sbn.id} key=${sbn.key.take(80)} ongoing=${sbn.isOngoing}"
+        )
         // 记录“确实发过通知”的应用，用于管理列表数据源
         ReadAloudPrefs.rememberKnownPackage(applicationContext, pkg)
 
         // 默认关闭：仅当用户在列表里手动开启该应用时才朗读
-        if (!ReadAloudPrefs.isReadEnabled(applicationContext, pkg)) return
+        if (!ReadAloudPrefs.isReadEnabled(applicationContext, pkg)) {
+            Log.d(TAG, "skip disabled pkg=$pkg")
+            return
+        }
 
         // 蓝牙模式：仅连接蓝牙音频输出时才朗读；正常模式不限制路由
         if (ReadAloudPrefs.getPlaybackRouteMode(applicationContext) == ReadAloudPrefs.PlaybackRouteMode.BLUETOOTH) {
-            if (!AudioRouteUtils.isBluetoothHeadsetConnected(applicationContext)) return
+            if (!AudioRouteUtils.isBluetoothHeadsetConnected(applicationContext)) {
+                Log.d(TAG, "skip bluetooth mode without headset pkg=$pkg")
+                return
+            }
         }
 
         Log.d(TAG, "onNotificationPosted pkg=${pkg} id=${sbn.id} ongoing=${sbn.isOngoing}")
@@ -67,6 +77,10 @@ class NotificationTtsListenerService : NotificationListenerService() {
             "parsed title='${title.take(80)}' announcements=${announcements.size} " +
                 "preview='${announcements.joinToString(" | ").take(160)}'"
         )
+        if (announcements.isEmpty()) {
+            Log.d(TAG, "skip empty announcement pkg=$pkg category=${notification.category}")
+            return
+        }
 
         // MIUI/部分 ROM 会限制后台绑定 TTS，引导到前台服务朗读更稳定
         for (toSpeak in announcements) {
