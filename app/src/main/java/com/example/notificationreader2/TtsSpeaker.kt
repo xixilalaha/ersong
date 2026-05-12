@@ -21,6 +21,7 @@ class TtsSpeaker(
     private var tts: TextToSpeech? = null
     @Volatile private var ready: Boolean = false
     @Volatile private var pendingText: String? = null
+    private var pendingOnDone: (() -> Unit)? = null
     private var createdAtMs: Long = 0L
     private var initAttempts: Int = 0
     private val doneCallbacks: ConcurrentHashMap<String, () -> Unit> = ConcurrentHashMap()
@@ -119,10 +120,17 @@ class TtsSpeaker(
         Log.d(tag, "TTS setLanguage zh result=$lastResult ready=$ready")
         onReady(ready)
 
-        val toSpeak = pendingText
-        if (ready && !toSpeak.isNullOrBlank()) {
-            pendingText = null
-            speak(toSpeak, onDone = null)
+        // 不要在 onInit 回调栈里立刻 speak：部分机型首句会合成失败或无声；
+        // 延后到下一轮 Looper，并带上排队时保存的 onDone，避免前台队列卡住。
+        handler.post {
+            if (tts == null) return@post
+            val toSpeak = pendingText
+            val toDone = pendingOnDone
+            if (ready && !toSpeak.isNullOrBlank()) {
+                pendingText = null
+                pendingOnDone = null
+                speak(toSpeak, toDone)
+            }
         }
     }
 
@@ -134,6 +142,7 @@ class TtsSpeaker(
         val engine = tts ?: return
         if (!ready) {
             pendingText = text
+            pendingOnDone = onDone
             val now = System.currentTimeMillis()
             val ageMs = now - createdAtMs
             Log.d(tag, "speak queued: not ready (len=${text.length}) ageMs=$ageMs attempts=$initAttempts")
@@ -205,6 +214,7 @@ class TtsSpeaker(
         tts = null
         ready = false
         pendingText = null
+        pendingOnDone = null
         doneCallbacks.clear()
         listenerInstalled = false
         Log.d(tag, "TTS shutdown")
@@ -215,6 +225,7 @@ class TtsSpeaker(
     fun stopNow() {
         val engine = tts ?: return
         pendingText = null
+        pendingOnDone = null
         doneCallbacks.clear()
         try {
             engine.stop()

@@ -187,14 +187,28 @@ class TtsForegroundService : Service() {
         speakWatchdog = wd
         handler.postDelayed(wd, 30000)
 
-        sp.speak(next.text) {
-            handler.post {
+        // 部分机型在 startForeground / TTS onInit 刚结束立刻 speak 会首句失败（无声但走 onDone），
+        // 短延迟再提交合成，避免用户只听到第二条。
+        val textToSpeak = next.text
+        handler.postDelayed({
+            val spNow = speaker
+            if (spNow == null || !spNow.isReady()) {
+                queue.addFirst(QueueItem(collapseKey = next.collapseKey, text = textToSpeak))
                 isSpeaking = false
                 speakWatchdog?.let { handler.removeCallbacks(it) }
                 speakWatchdog = null
                 speakNextIfIdle()
+                return@postDelayed
             }
-        }
+            spNow.speak(textToSpeak) {
+                handler.post {
+                    isSpeaking = false
+                    speakWatchdog?.let { handler.removeCallbacks(it) }
+                    speakWatchdog = null
+                    speakNextIfIdle()
+                }
+            }
+        }, 80L)
     }
 
     private fun scheduleStop() {
