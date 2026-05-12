@@ -16,7 +16,7 @@ class TtsForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private var speaker: TtsSpeaker? = null
-    private val queue: ArrayDeque<String> = ArrayDeque()
+    private val queue: ArrayDeque<QueueItem> = ArrayDeque()
     private var isSpeaking: Boolean = false
     private val handler by lazy { android.os.Handler(mainLooper) }
     private var stopRunnable: Runnable? = null
@@ -55,7 +55,14 @@ class TtsForegroundService : Service() {
         lastStartId = startId
         val action = intent?.action
         val text = intent?.getStringExtra(EXTRA_TEXT).orEmpty()
-        Log.d(TAG, "onStartCommand textLen=${text.length}")
+        val texts = intent?.getStringArrayListExtra(EXTRA_TEXTS).orEmpty()
+        val collapseKey = intent?.getStringExtra(EXTRA_COLLAPSE_KEY)
+        val incoming = when {
+            texts.isNotEmpty() -> texts.filter { it.isNotBlank() }
+            text.isNotBlank() -> listOf(text)
+            else -> emptyList()
+        }
+        Log.d(TAG, "onStartCommand texts=${incoming.size} textLen=${incoming.sumOf { it.length }}")
 
         startForeground(NOTIF_ID, buildNotification())
 
@@ -72,8 +79,8 @@ class TtsForegroundService : Service() {
         // 兜底：即使没有显式 reload，也确保当前 speaker 使用最新选择的引擎
         rebuildSpeakerIfNeeded(desired = desiredEngineFromPrefs(), force = false)
 
-        if (text.isNotBlank()) {
-            queue.addLast(text)
+        if (incoming.isNotEmpty()) {
+            enqueue(collapseKey, incoming)
         }
 
         // 有新内容进来就取消停止计划
@@ -82,6 +89,21 @@ class TtsForegroundService : Service() {
 
         speakNextIfIdle()
         return START_NOT_STICKY
+    }
+
+    private fun enqueue(collapseKey: String?, texts: List<String>) {
+        if (!collapseKey.isNullOrBlank()) {
+            queue.removeAll { it.collapseKey == collapseKey }
+        }
+
+        for (text in texts) {
+            queue.addLast(QueueItem(collapseKey = collapseKey, text = text))
+        }
+
+        while (queue.size > MAX_QUEUE_ITEMS) {
+            val dropped = queue.removeFirst()
+            Log.d(TAG, "drop old pending utterance collapseKey=${dropped.collapseKey}")
+        }
     }
 
     private fun desiredEngineFromPrefs(): String? {
@@ -140,7 +162,7 @@ class TtsForegroundService : Service() {
         speakWatchdog = wd
         handler.postDelayed(wd, 30000)
 
-        sp.speak(next) {
+        sp.speak(next.text) {
             handler.post {
                 isSpeaking = false
                 speakWatchdog?.let { handler.removeCallbacks(it) }
@@ -198,13 +220,29 @@ class TtsForegroundService : Service() {
         private const val TAG = "NotifTTS_FG"
         private const val CHANNEL_ID = "notif_tts"
         private const val NOTIF_ID = 1001
+        private const val MAX_QUEUE_ITEMS = 8
         private const val ACTION_RELOAD_ENGINE = "com.example.notificationreader2.action.RELOAD_ENGINE"
         private const val EXTRA_ENGINE = "extra_engine"
+        private const val EXTRA_TEXTS = "extra_texts"
+        private const val EXTRA_COLLAPSE_KEY = "extra_collapse_key"
         const val EXTRA_TEXT = "extra_text"
 
         fun start(context: Context, text: String) {
             val i = Intent(context, TtsForegroundService::class.java).apply {
                 putExtra(EXTRA_TEXT, text)
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(i)
+            } else {
+                context.startService(i)
+            }
+        }
+
+        fun start(context: Context, texts: List<String>, collapseKey: String?) {
+            if (texts.isEmpty()) return
+            val i = Intent(context, TtsForegroundService::class.java).apply {
+                putStringArrayListExtra(EXTRA_TEXTS, ArrayList(texts))
+                putExtra(EXTRA_COLLAPSE_KEY, collapseKey)
             }
             if (Build.VERSION.SDK_INT >= 26) {
                 context.startForegroundService(i)
@@ -225,4 +263,9 @@ class TtsForegroundService : Service() {
             }
         }
     }
+
+    private data class QueueItem(
+        val collapseKey: String?,
+        val text: String
+    )
 }

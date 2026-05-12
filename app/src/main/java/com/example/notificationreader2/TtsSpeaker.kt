@@ -159,21 +159,35 @@ class TtsSpeaker(
         val utteranceId = "notif_${System.nanoTime()}"
         Log.d(tag, "speak utteranceId=$utteranceId text='${text.take(140)}'")
 
+        try {
+            engine.setSpeechRate(1.0f)
+            engine.setPitch(1.0f)
+        } catch (t: Throwable) {
+            Log.w(tag, "reset voice params failed", t)
+        }
+
         if (onDone != null) {
             doneCallbacks[utteranceId] = {
                 handler.postDelayed(onDone, text.tailGuardDelayMs())
             }
         }
         // 不打断：依次播报
-        engine.speak(safeText, TextToSpeech.QUEUE_ADD, null, utteranceId)
+        val result = engine.speak(safeText, TextToSpeech.QUEUE_ADD, null, utteranceId)
+        if (result != TextToSpeech.SUCCESS) {
+            Log.w(tag, "speak failed result=$result utteranceId=$utteranceId")
+            doneCallbacks.remove(utteranceId)?.invoke()
+        }
     }
 
     private fun String.withTerminalPauseMarker(): String {
         val trimmed = trim()
         if (trimmed.isEmpty()) return trimmed
         val last = trimmed.last()
-        val hasPunctuation = last in "。！？!?；;，,、.：:"
-        return if (hasPunctuation) trimmed else "$trimmed。"
+        val hasTerminalPunctuation = last in "。！？!?."
+        if (hasTerminalPunctuation) return trimmed
+
+        val withoutHangingPause = trimmed.trimEnd('，', ',', '、', '；', ';', '：', ':')
+        return if (withoutHangingPause.isEmpty()) trimmed else "$withoutHangingPause。"
     }
 
     private fun String.tailGuardDelayMs(): Long {

@@ -82,12 +82,9 @@ class NotificationTtsListenerService : NotificationListenerService() {
             return
         }
 
-        // MIUI/部分 ROM 会限制后台绑定 TTS，引导到前台服务朗读更稳定
-        for (toSpeak in announcements) {
-            if (toSpeak.isNotBlank()) {
-                TtsForegroundService.start(applicationContext, toSpeak)
-            }
-        }
+        // MIUI/部分 ROM 会限制后台绑定 TTS，引导到前台服务朗读更稳定。
+        // 同一条聚合通知快速更新时，用 notification key 合并尚未播报的旧版本。
+        TtsForegroundService.start(applicationContext, announcements, sbn.key)
     }
 
     private fun extractAnnouncements(
@@ -103,9 +100,11 @@ class NotificationTtsListenerService : NotificationListenerService() {
             for (message in Notification.MessagingStyle.Message.getMessagesFromBundleArray(messages)) {
                 val text = message.text?.toString()?.trim().orEmpty()
                 if (text.isBlank()) continue
-                val sender = message.senderPerson?.name?.toString()
-                    ?: message.sender?.toString()
-                    ?: normalizedTitle(title)
+                val sender = title.ifBlank {
+                    message.senderPerson?.name?.toString()
+                        ?: message.sender?.toString()
+                        ?: ""
+                }
                 result.add(joinSenderAndText(sender, text))
             }
         }
@@ -124,7 +123,7 @@ class NotificationTtsListenerService : NotificationListenerService() {
                     ?: extras.getCharSequence(Notification.EXTRA_TEXT)
             )?.toString()?.trim().orEmpty()
             if (text.isNotBlank()) {
-                result.add(joinSenderAndText(normalizedTitle(title), text))
+                result.add(joinSenderAndText(title, text))
             }
         }
 
@@ -133,13 +132,6 @@ class NotificationTtsListenerService : NotificationListenerService() {
             .filter { it.isNotBlank() }
             .distinct()
             .filter { rememberIfNew(sbn.key, it) }
-    }
-
-    private fun normalizedTitle(title: String): String {
-        return title
-            .replace(Regex("""\(\d+\s*条新消息\)"""), "")
-            .replace(Regex("""（\d+\s*条新消息）"""), "")
-            .trim()
     }
 
     private fun joinSenderAndText(sender: String, text: String): String {
