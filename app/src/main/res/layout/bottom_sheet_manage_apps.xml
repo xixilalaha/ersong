@@ -40,6 +40,20 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@id/title" />
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/toggleNotifiedAppsButton"
+        style="?attr/materialButtonOutlinedStyle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginTop="8dp"
+        android:text="@string/show_notified_apps"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/addAppButton" />
+
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/emptyText"
         android:layout_width="0dp"
@@ -52,7 +66,7 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/addAppButton" />
+        app:layout_constraintTop_toBottomOf="@id/toggleNotifiedAppsButton" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/appList"
@@ -61,7 +75,6 @@
         android:layout_marginTop="8dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/addAppButton" />
+        app:layout_constraintTop_toBottomOf="@id/toggleNotifiedAppsButton" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
-

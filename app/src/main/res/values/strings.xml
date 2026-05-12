@@ -16,6 +16,8 @@
     <string name="no_known_apps">暂无列表（未找到桌面可见应用）</string>
     <string name="manual_add_app">手动添加</string>
     <string name="notified_apps_section">通知过的应用</string>
+    <string name="show_notified_apps">展开通知过的应用（%1$d）</string>
+    <string name="hide_notified_apps">收起通知过的应用（%1$d）</string>
     <string name="pick_apps_to_add">选择要添加到列表的应用</string>
     <string name="add_selected">添加所选</string>
     <string name="close">关闭</string>

@@ -67,6 +67,13 @@
 - `joinSenderAndText(sender, text)`：把发送者和正文拼成朗读文本。
 - `rememberIfNew(notificationKey, text)`：短时间去重。
 
+新人要注意：
+
+- 通知监听拿到的是“通知快照”，不是聊天软件的完整消息流。
+- QQ/微信这类应用经常复用同一个通知 id/key 更新聚合通知。
+- 如果聊天应用没有把所有中间消息放进通知 extras，本项目无法凭通知权限恢复那些内容。
+- 这个文件只能尽量解析系统已经暴露出来的内容，不能读取聊天软件内部数据库。
+
 ### app/src/main/java/com/example/notificationreader2/TtsForegroundService.kt
 
 前台朗读服务。它夹在通知监听和 TTS 引擎之间，负责排队和保活。
@@ -99,6 +106,13 @@
 - `start(context, texts, collapseKey)`：外部传入多条朗读任务，并支持同通知合并。
 - `reloadEngine(context, enginePkg)`：用户切换 TTS 引擎后重建 speaker。
 
+新人要注意：
+
+- 队列里的 `collapseKey` 通常来自通知的 `sbn.key`。
+- 同一条聚合通知快速更新时，尚未播报的旧版本会被新版本替换，避免 TTS 一直朗读过期计数。
+- 这个策略更偏“实时稳定”，不等于“保证逐条不漏”。
+- 如果以后要做“完整播报模式”，这里的 `enqueue()` 是重点改动位置。
+
 ### app/src/main/java/com/example/notificationreader2/TtsSpeaker.kt
 
 TTS 引擎封装。它直接和 Android `TextToSpeech` API 打交道。
@@ -123,6 +137,12 @@ TTS 引擎封装。它直接和 Android `TextToSpeech` API 打交道。
 - `withTerminalPauseMarker()`：给文本补句尾停顿。
 - `tailGuardDelayMs()`：根据文本长度估算尾音保护时间。
 - `shutdown()`：释放 TTS。
+
+新人要注意：
+
+- `speak()` 每次播放前会重置语速和音调，减少部分厂商 TTS 连续合成后音色漂移。
+- `withTerminalPauseMarker()` 会把没有句尾的文本补成自然句尾，避免以顿号、逗号、冒号结束时影响播报语气。
+- `tailGuardDelayMs()` 是为部分 TTS 引擎“完成回调早于真实尾音”准备的缓冲。
 
 ### app/src/main/java/com/example/notificationreader2/ReadAloudPrefs.kt
 
@@ -347,18 +367,97 @@ Android 清单文件，声明权限、Activity、Service。
 - `MainActivity.kt`
   - 保存用户选择的 TTS 引擎，key 是 `tts_engine`
 
+## 当前实现中的关键策略
+
+### 1. 通知权限的能力边界
+
+当前应用使用的是 Android 通知监听权限，也就是 `NotificationListenerService`。
+
+它能拿到：
+
+- 系统状态栏里出现过的通知。
+- 通知更新时 Android 分发给本应用的快照。
+- 通知 extras 中暴露的标题、正文、消息列表、文本行等信息。
+
+它不能保证拿到：
+
+- 聊天软件内部的完整消息数据库。
+- 已经被聊天软件覆盖掉的旧通知快照。
+- 聊天软件没有放进通知 extras 的中间消息。
+- 用户在聊天软件里关闭通知详情后被隐藏的正文。
+
+所以如果 QQ 群消息从 `7条新消息` 直接跳到 `11条新消息`，而最新通知里只给了最后一条摘要，本项目无法从通知权限里还原中间 4 条。
+
+### 2. 群聊多人快速发消息时为什么可能漏报
+
+群聊通知常见情况是：多个用户连续发消息，但聊天软件只维护一条聚合通知。
+
+例如：
+
+```text
+第 7 条通知快照：群名(7条新消息)：A 的消息
+第 11 条通知快照：群名(11条新消息)：B 的消息
+第 18 条通知快照：群名(18条新消息)：C 的消息
+```
+
+中间的第 8、9、10 条消息是否能被读到，取决于 QQ 是否把它们放进了最新通知的 `EXTRA_MESSAGES` 或 `EXTRA_TEXT_LINES`。
+
+如果通知 extras 里有完整消息列表，`extractAnnouncements()` 有机会解析出来。  
+如果通知 extras 里只有最新摘要，应用就只能读到最新摘要。
+
+### 3. 当前 TTS 队列策略
+
+当前队列策略偏向“稳定、不过度堆积”：
+
+- `NotificationTtsListenerService` 把同一次通知解析出的多条文本交给 `TtsForegroundService`。
+- `TtsForegroundService` 使用通知 key 作为 `collapseKey`。
+- 同一个 `collapseKey` 的旧待播内容会被新内容替换。
+- 队列最多保留 `MAX_QUEUE_ITEMS` 条，避免消息爆发时越积越多。
+
+这样做的好处：
+
+- TTS 不会慢慢朗读大量过期状态。
+- 连续消息时更不容易拖到几十秒以后才播。
+- 对小米等厂商 TTS 引擎更稳定，减少连续合成后的音色异常。
+
+代价：
+
+- 如果旧待播内容里有具体消息，而新通知只剩摘要，旧内容可能被替换掉。
+- 它适合“实时播报最新通知”，不适合追求“每条群消息绝对不漏”。
+
+### 4. 如果以后要做“完整播报模式”
+
+可以考虑新增一个用户设置：
+
+```text
+实时模式：同一通知 key 只保留最新待播内容，当前更接近这个策略。
+完整模式：尽量保留已经解析出的每条具体消息，只对摘要类通知做覆盖。
+```
+
+完整模式的大致改动方向：
+
+- 在 `NotificationTtsListenerService.extractAnnouncements()` 里尽量拆出消息级别的数据。
+- 给每条消息生成指纹，例如 `通知key + 发送者 + 正文 + 时间`。
+- 在 `rememberIfNew()` 里按消息指纹去重。
+- 在 `TtsForegroundService.enqueue()` 里不要简单按通知 key 替换所有旧内容，而是只替换“摘要类”或重复内容。
+- 必要时在 `ReadAloudPrefs` 里保存用户选择的播报模式。
+
 ## 常见改动要去哪改
 
 | 需求 | 文件 | 函数名 / 位置 |
 | --- | --- | --- |
 | 想改通知解析策略，比如优先读 `EXTRA_MESSAGES` 还是 `EXTRA_TEXT_LINES` | `NotificationTtsListenerService.kt` | `extractAnnouncements()` |
+| 想处理群聊多人快速发消息时的漏报问题 | `NotificationTtsListenerService.kt`、`TtsForegroundService.kt` | `extractAnnouncements()`、`rememberIfNew()`、`enqueue()` |
+| 想区分“完整播报模式”和“实时最新模式” | `ReadAloudPrefs.kt`、`MainActivity.kt`、`NotificationTtsListenerService.kt`、`TtsForegroundService.kt` | 新增偏好项、增加 UI 开关、调整 `extractAnnouncements()` 和 `enqueue()` |
 | 想改“发送者：正文”的拼接格式 | `NotificationTtsListenerService.kt` | `joinSenderAndText()` |
 | 想改通知去重时间，比如 2 分钟太长/太短 | `NotificationTtsListenerService.kt` | `RECENT_TTL_MS`、`rememberIfNew()` |
 | 想改哪些通知不朗读，比如过滤群名、过滤空内容 | `NotificationTtsListenerService.kt` | `onNotificationPosted()`、`extractAnnouncements()` |
+| 想记录通知 extras 里到底有哪些字段，方便分析 QQ/微信通知格式 | `NotificationTtsListenerService.kt` | `onNotificationPosted()` 中增加调试日志 |
 | 想改蓝牙模式的判断条件 | `AudioRouteUtils.kt` | `isBluetoothHeadsetConnected()` |
 | 想改“只有蓝牙时播报/普通模式”的逻辑 | `NotificationTtsListenerService.kt`、`ReadAloudPrefs.kt` | `onNotificationPosted()`、`getPlaybackRouteMode()` |
 | 想改 TTS 队列合并策略，比如是否按通知 key 覆盖旧内容 | `TtsForegroundService.kt` | `enqueue()` |
 | 想改 TTS 队列最大长度 | `TtsForegroundService.kt` | `MAX_QUEUE_ITEMS` |
+| 想保留具体消息、只覆盖聚合摘要 | `NotificationTtsListenerService.kt`、`TtsForegroundService.kt` | `extractAnnouncements()`、`enqueue()` |
 | 想改一条播完后多久播下一条 | `TtsSpeaker.kt` | `tailGuardDelayMs()` |
 | 想改 TTS 句尾停顿处理 | `TtsSpeaker.kt` | `withTerminalPauseMarker()` |
 | 想改 TTS 语速或音调 | `TtsSpeaker.kt` | `speak()` 里 `setSpeechRate()`、`setPitch()` |
@@ -401,4 +500,3 @@ Android 清单文件，声明权限、Activity、Service。
   -> TtsForegroundService 排队
   -> TtsSpeaker 朗读
 ```
-

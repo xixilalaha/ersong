@@ -325,8 +325,10 @@ class MainActivity : AppCompatActivity() {
         val list = view.findViewById<RecyclerView>(R.id.appList)
         val addBtn = view.findViewById<MaterialButton>(R.id.addAppButton)
         val closeBtn = view.findViewById<MaterialButton>(R.id.closeButton)
+        val toggleNotifiedBtn = view.findViewById<MaterialButton>(R.id.toggleNotifiedAppsButton)
 
         lateinit var adapter: AppToggleAdapter
+        var showNotifiedApps = false
         val launcherApps = getSystemService(LauncherApps::class.java)
         val commonNotificationPkgs = listOf(
             "com.tencent.mm",              // 微信
@@ -530,7 +532,16 @@ class MainActivity : AppCompatActivity() {
 
             emptyText.visibility =
                 if (selectedItems.isEmpty() && notifiedItems.isEmpty()) View.VISIBLE else View.GONE
-            adapter.submitSections(selectedItems, notifiedItems)
+
+            toggleNotifiedBtn.visibility = if (notifiedItems.isEmpty()) View.GONE else View.VISIBLE
+            toggleNotifiedBtn.text = getString(
+                if (showNotifiedApps) R.string.hide_notified_apps else R.string.show_notified_apps,
+                notifiedItems.size
+            )
+            adapter.submitSections(
+                selectedItems = selectedItems,
+                notifiedItems = if (showNotifiedApps) notifiedItems else emptyList()
+            )
         }
 
         adapter = AppToggleAdapter(
@@ -561,6 +572,10 @@ class MainActivity : AppCompatActivity() {
         )
         list.layoutManager = LinearLayoutManager(this)
         list.adapter = adapter
+        toggleNotifiedBtn.setOnClickListener {
+            showNotifiedApps = !showNotifiedApps
+            refresh()
+        }
 
         fun openManualAddDialog() {
             val manualDialogPickView =
