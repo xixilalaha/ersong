@@ -64,6 +64,12 @@ class TtsForegroundService : Service() {
         }
         Log.d(TAG, "onStartCommand texts=${incoming.size} textLen=${incoming.sumOf { it.length }}")
 
+        if (action == ACTION_STOP_ALL) {
+            Log.d(TAG, "stop all requested")
+            stopAllPlaybackAndSelf()
+            return START_NOT_STICKY
+        }
+
         startForeground(NOTIF_ID, buildNotification())
 
         if (action == ACTION_RELOAD_ENGINE) {
@@ -73,6 +79,12 @@ class TtsForegroundService : Service() {
             // 不清空队列：继续按队列播报
             isSpeaking = false
             speakNextIfIdle()
+            return START_NOT_STICKY
+        }
+
+        if (!ReadAloudPrefs.isMasterEnabled(applicationContext)) {
+            Log.d(TAG, "skip incoming because master switch is off")
+            stopAllPlaybackAndSelf()
             return START_NOT_STICKY
         }
 
@@ -89,6 +101,19 @@ class TtsForegroundService : Service() {
 
         speakNextIfIdle()
         return START_NOT_STICKY
+    }
+
+    private fun stopAllPlaybackAndSelf() {
+        stopRunnable?.let { handler.removeCallbacks(it) }
+        stopRunnable = null
+        speakWatchdog?.let { handler.removeCallbacks(it) }
+        speakWatchdog = null
+        retryRunnable?.let { handler.removeCallbacks(it) }
+        retryRunnable = null
+        queue.clear()
+        isSpeaking = false
+        speaker?.stopNow()
+        stopSelf()
     }
 
     private fun enqueue(collapseKey: String?, texts: List<String>) {
@@ -222,6 +247,7 @@ class TtsForegroundService : Service() {
         private const val NOTIF_ID = 1001
         private const val MAX_QUEUE_ITEMS = 8
         private const val ACTION_RELOAD_ENGINE = "com.example.notificationreader2.action.RELOAD_ENGINE"
+        private const val ACTION_STOP_ALL = "com.example.notificationreader2.action.STOP_ALL"
         private const val EXTRA_ENGINE = "extra_engine"
         private const val EXTRA_TEXTS = "extra_texts"
         private const val EXTRA_COLLAPSE_KEY = "extra_collapse_key"
@@ -261,6 +287,13 @@ class TtsForegroundService : Service() {
             } else {
                 context.startService(i)
             }
+        }
+
+        fun stopAll(context: Context) {
+            val i = Intent(context, TtsForegroundService::class.java).apply {
+                action = ACTION_STOP_ALL
+            }
+            context.startService(i)
         }
     }
 

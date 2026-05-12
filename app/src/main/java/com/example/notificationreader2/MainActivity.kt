@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -27,6 +29,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textview.MaterialTextView
 import java.text.Collator
 import java.util.Locale
@@ -39,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adapter: AppToggleAdapter
     private var audioManager: AudioManager? = null
     private var deviceCallback: AudioDeviceCallback? = null
+    private var syncingMasterSwitch: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +57,8 @@ class MainActivity : AppCompatActivity() {
                 requestPostNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+
+        setupMasterSwitch()
 
         findViewById<MaterialButton>(R.id.openAccessButton).setOnClickListener {
             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
@@ -187,6 +193,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatusUi() {
+        val masterSwitch = findViewById<SwitchMaterial>(R.id.masterReadSwitch)
+        val masterEnabled = ReadAloudPrefs.isMasterEnabled(this)
+        if (masterSwitch.isChecked != masterEnabled) {
+            syncingMasterSwitch = true
+            masterSwitch.isChecked = masterEnabled
+            syncingMasterSwitch = false
+        }
+
         val tv = findViewById<com.google.android.material.textview.MaterialTextView>(R.id.headsetStatusText)
         when (ReadAloudPrefs.getPlaybackRouteMode(this)) {
             ReadAloudPrefs.PlaybackRouteMode.BLUETOOTH -> {
@@ -201,6 +215,87 @@ class MainActivity : AppCompatActivity() {
 
         val ttsTv = findViewById<com.google.android.material.textview.MaterialTextView>(R.id.ttsEngineStatusText)
         ttsTv.text = buildTtsEngineStatusText()
+    }
+
+    private fun setupMasterSwitch() {
+        val masterSwitch = findViewById<SwitchMaterial>(R.id.masterReadSwitch)
+        masterSwitch.isChecked = ReadAloudPrefs.isMasterEnabled(this)
+        masterSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (syncingMasterSwitch) return@setOnCheckedChangeListener
+
+            if (isChecked) {
+                val missingPermissions = getMissingRequiredPermissions()
+                if (missingPermissions.isNotEmpty()) {
+                    syncingMasterSwitch = true
+                    masterSwitch.isChecked = false
+                    syncingMasterSwitch = false
+                    ReadAloudPrefs.setMasterEnabled(this, false)
+                    showMissingPermissionsDialog(missingPermissions)
+                    return@setOnCheckedChangeListener
+                }
+                ReadAloudPrefs.setMasterEnabled(this, true)
+                Toast.makeText(this, "通知播报已开启", Toast.LENGTH_SHORT).show()
+            } else {
+                ReadAloudPrefs.setMasterEnabled(this, false)
+                TtsForegroundService.stopAll(this)
+                Toast.makeText(this, "通知播报已关闭", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun getMissingRequiredPermissions(): List<String> {
+        val missing = mutableListOf<String>()
+        if (!isNotificationListenerEnabled()) {
+            missing.add(getString(R.string.permission_notification_access))
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                missing.add(getString(R.string.permission_post_notifications))
+            }
+        }
+        return missing
+    }
+
+    private fun showMissingPermissionsDialog(missingPermissions: List<String>) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.missing_permissions_title)
+            .setMessage(
+                getString(
+                    R.string.missing_permissions_message,
+                    missingPermissions.joinToString(separator = "\n") { "· $it" }
+                )
+            )
+            .setPositiveButton(R.string.open_settings) { _, _ ->
+                if (!isNotificationListenerEnabled()) {
+                    startActivity(
+                        Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                } else if (Build.VERSION.SDK_INT >= 33) {
+                    openAppNotificationSettings()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun openAppNotificationSettings() {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(intent)
+        } catch (_: Throwable) {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:$packageName"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
     }
 
     private fun isNotificationListenerEnabled(): Boolean {
@@ -356,6 +451,7 @@ class MainActivity : AppCompatActivity() {
             val hiddenPkgs = ReadAloudPrefs.getHiddenPackages(this)
             val manualIncluded = ReadAloudPrefs.getManualIncludedPackages(this)
             val enabledPkgs = ReadAloudPrefs.getEnabledPackages(this)
+            val knownPkgs = ReadAloudPrefs.getKnownPackages(this)
 
             // 以 Launcher “可见应用”作为“允许展示白名单”：
             // - 被隐藏/无桌面入口的应用永远不展示（即使被手动添加/曾经开启）
@@ -368,8 +464,7 @@ class MainActivity : AppCompatActivity() {
 
             val launcherSet = launcherPkgs.toSet()
 
-            // 无主列表预制包：仅在「手动添加」后出现；顺带保留已在 enabled 名单里的旧数据以免列表里失联
-            val candidatePkgs = (manualIncluded + enabledPkgs)
+            val selectedPkgs = (manualIncluded + enabledPkgs)
                 .asSequence()
                 .filter { it.isNotBlank() }
                 .filter { it in launcherSet }
@@ -377,17 +472,17 @@ class MainActivity : AppCompatActivity() {
                 .distinct()
                 .toList()
 
-            val items = candidatePkgs.mapNotNull { p ->
+            fun buildToggleItem(p: String, allowUnselectedSystem: Boolean): AppToggleItem? {
                 val ai = try {
                     packageManager.getApplicationInfo(p, 0)
                 } catch (_: Throwable) {
                     // 可能是瞬态包/卸载中，直接跳过
                     null
                 }
-                if (ai == null && p !in commonNotificationPkgs && p !in ReadAloudPrefs.getKnownPackages(this)) {
-                    return@mapNotNull null
+                if (ai == null && p !in commonNotificationPkgs && p !in knownPkgs) {
+                    return null
                 }
-                if (ai != null && !ai.enabled) return@mapNotNull null
+                if (ai != null && !ai.enabled) return null
 
                 val enabled = ReadAloudPrefs.isReadEnabled(this, p)
                 // 默认隐藏系统应用/系统组件（列表更聚焦）；但如果用户已手动开启朗读，则保留展示，避免“开了却找不到”
@@ -396,26 +491,58 @@ class MainActivity : AppCompatActivity() {
                 val isUpdatedSystemApp = ai != null &&
                     (ai.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
                 val manuallyIncluded = manualIncluded.contains(p)
-                if (isSystem && !isUpdatedSystemApp && !enabled && !manuallyIncluded) return@mapNotNull null
+                if (
+                    !allowUnselectedSystem &&
+                    isSystem &&
+                    !isUpdatedSystemApp &&
+                    !enabled &&
+                    !manuallyIncluded
+                ) {
+                    return null
+                }
 
-                AppToggleItem(
+                return AppToggleItem(
                     packageName = p,
                     appName = getAppLabel(p),
                     icon = getAppIcon(p),
-                    enabled = enabled
+                    enabled = enabled,
+                    announcementMode = ReadAloudPrefs.getAnnouncementMode(this, p)
                 )
+            }
+
+            val selectedItems = selectedPkgs.mapNotNull { p ->
+                buildToggleItem(p, allowUnselectedSystem = false)
             }.sortedWith { a, b ->
                 if (a.enabled != b.enabled) return@sortedWith if (a.enabled) -1 else 1
                 a.appName.compareTo(b.appName)
             }
 
-            emptyText.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
-            adapter.submit(items)
+            val notifiedItems = knownPkgs
+                .asSequence()
+                .filter { it.isNotBlank() }
+                .filter { it in launcherSet }
+                .filter { it !in hiddenPkgs }
+                .filter { it !in selectedPkgs }
+                .distinct()
+                .mapNotNull { p -> buildToggleItem(p, allowUnselectedSystem = true) }
+                .sortedBy { it.appName }
+                .toList()
+
+            emptyText.visibility =
+                if (selectedItems.isEmpty() && notifiedItems.isEmpty()) View.VISIBLE else View.GONE
+            adapter.submitSections(selectedItems, notifiedItems)
         }
 
         adapter = AppToggleAdapter(
             onToggle = { pkg, enabled ->
                 ReadAloudPrefs.setReadEnabled(this, pkg, enabled)
+                if (enabled) {
+                    ReadAloudPrefs.addManualIncludedPackages(this, listOf(pkg))
+                    refresh()
+                }
+            },
+            onModeChange = { pkg, mode ->
+                ReadAloudPrefs.setAnnouncementMode(this, pkg, mode)
             },
             onLongPress = { pkg ->
                 MaterialAlertDialogBuilder(this)
@@ -424,6 +551,7 @@ class MainActivity : AppCompatActivity() {
                     .setPositiveButton("移除") { _, _ ->
                         ReadAloudPrefs.removeManualIncludedPackage(this, pkg)
                         ReadAloudPrefs.setReadEnabled(this, pkg, false)
+                        ReadAloudPrefs.removeAnnouncementMode(this, pkg)
                         ReadAloudPrefs.addHiddenPackage(this, pkg)
                         refresh()
                     }

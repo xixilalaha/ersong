@@ -4,11 +4,13 @@ import android.content.Context
 
 object ReadAloudPrefs {
     private const val PREFS = "prefs"
+    private const val KEY_MASTER_ENABLED = "read_aloud_master_enabled"
     private const val KEY_ENABLED = "read_aloud_enabled"
     private const val KEY_KNOWN = "known_notification_apps"
     private const val KEY_PLAYBACK_ROUTE = "read_aloud_playback_route"
     private const val KEY_MANUAL_INCLUDED = "read_aloud_manual_included"
     private const val KEY_HIDDEN = "read_aloud_hidden"
+    private const val KEY_ANNOUNCEMENT_MODE_PREFIX = "read_aloud_announcement_mode_"
 
     enum class PlaybackRouteMode {
         /** 仅已连接蓝牙耳机等蓝牙音频设备时播报 */
@@ -16,8 +18,25 @@ object ReadAloudPrefs {
         /** 不按蓝牙限制，走系统默认音频输出（扬声器/有线等） */
         NORMAL
     }
+
+    enum class AnnouncementMode {
+        /** 播报应用、标题和通知正文 */
+        DETAIL,
+        /** 只播报应用有一条新消息 */
+        TITLE_ONLY
+    }
     // 旧版本遗留：默认全开/禁用名单；升级后统一迁移到 enabled 名单
     private const val KEY_DISABLED_LEGACY = "read_aloud_disabled"
+
+    fun isMasterEnabled(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return sp.getBoolean(KEY_MASTER_ENABLED, false)
+    }
+
+    fun setMasterEnabled(context: Context, enabled: Boolean) {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        sp.edit().putBoolean(KEY_MASTER_ENABLED, enabled).apply()
+    }
 
     fun isReadEnabled(context: Context, pkg: String): Boolean {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -39,6 +58,30 @@ object ReadAloudPrefs {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         migrateIfNeeded(sp)
         return sp.getStringSet(KEY_ENABLED, emptySet()).orEmpty()
+    }
+
+    fun getAnnouncementMode(context: Context, pkg: String): AnnouncementMode {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return when (sp.getString(announcementModeKey(pkg), null)) {
+            "title_only" -> AnnouncementMode.TITLE_ONLY
+            else -> AnnouncementMode.DETAIL
+        }
+    }
+
+    fun setAnnouncementMode(context: Context, pkg: String, mode: AnnouncementMode) {
+        if (pkg.isBlank()) return
+        val value = when (mode) {
+            AnnouncementMode.DETAIL -> "detail"
+            AnnouncementMode.TITLE_ONLY -> "title_only"
+        }
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        sp.edit().putString(announcementModeKey(pkg), value).apply()
+    }
+
+    fun removeAnnouncementMode(context: Context, pkg: String) {
+        if (pkg.isBlank()) return
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        sp.edit().remove(announcementModeKey(pkg)).apply()
     }
 
     fun rememberKnownPackage(context: Context, pkg: String) {
@@ -102,6 +145,14 @@ object ReadAloudPrefs {
         if (set.add(pkg)) sp.edit().putStringSet(KEY_HIDDEN, set).apply()
     }
 
+    fun removeHiddenPackage(context: Context, pkg: String) {
+        if (pkg.isBlank()) return
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        migrateIfNeeded(sp)
+        val set = sp.getStringSet(KEY_HIDDEN, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(pkg)) sp.edit().putStringSet(KEY_HIDDEN, set).apply()
+    }
+
     fun getPlaybackRouteMode(context: Context): PlaybackRouteMode {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return when (sp.getString(KEY_PLAYBACK_ROUTE, null)) {
@@ -130,5 +181,8 @@ object ReadAloudPrefs {
             .remove(KEY_DISABLED_LEGACY)
             .apply()
     }
-}
 
+    private fun announcementModeKey(pkg: String): String {
+        return KEY_ANNOUNCEMENT_MODE_PREFIX + pkg
+    }
+}

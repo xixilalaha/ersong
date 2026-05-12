@@ -6,6 +6,6 @@ data class AppToggleItem(
     val packageName: String,
     val appName: String,
     val icon: Drawable?,
-    val enabled: Boolean
+    var enabled: Boolean,
+    var announcementMode: ReadAloudPrefs.AnnouncementMode
 )
-

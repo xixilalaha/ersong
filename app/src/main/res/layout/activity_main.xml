@@ -19,17 +19,30 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/masterReadSwitch"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginTop="20dp"
+        android:text="@string/master_read_aloud_switch"
+        android:textAppearance="?attr/textAppearanceTitleMedium"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/hintText" />
+
     <com.google.android.material.button.MaterialButton
         android:id="@+id/openAccessButton"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="20dp"
         android:text="@string/open_notification_access"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/hintText" />
+        app:layout_constraintTop_toBottomOf="@id/masterReadSwitch" />
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/ttsHintText"

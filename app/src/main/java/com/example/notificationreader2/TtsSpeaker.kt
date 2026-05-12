@@ -211,4 +211,15 @@ class TtsSpeaker(
         // 部分引擎的 onDone 回调早于真实音频结束；此处不要 stop()，避免切断尾音
         engine.shutdown()
     }
+
+    fun stopNow() {
+        val engine = tts ?: return
+        pendingText = null
+        doneCallbacks.clear()
+        try {
+            engine.stop()
+        } catch (t: Throwable) {
+            Log.w(tag, "TTS stop failed", t)
+        }
+    }
 }

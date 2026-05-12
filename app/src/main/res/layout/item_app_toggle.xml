@@ -28,7 +28,7 @@
         android:textAppearance="?attr/textAppearanceBodyLarge"
         app:layout_constraintStart_toEndOf="@id/appIcon"
         app:layout_constraintTop_toTopOf="@id/appIcon"
-        app:layout_constraintEnd_toStartOf="@id/readSwitch" />
+        app:layout_constraintEnd_toStartOf="@id/announcementModeGroup" />
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/packageName"
@@ -40,15 +40,52 @@
         android:textAppearance="?attr/textAppearanceBodySmall"
         app:layout_constraintStart_toEndOf="@id/appIcon"
         app:layout_constraintTop_toBottomOf="@id/appName"
-        app:layout_constraintEnd_toStartOf="@id/readSwitch" />
+        app:layout_constraintEnd_toStartOf="@id/announcementModeGroup" />
 
-    <com.google.android.material.materialswitch.MaterialSwitch
-        android:id="@+id/readSwitch"
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/announcementModeGroup"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        app:selectionRequired="true"
+        app:singleSelection="true"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent" />
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/offModeButton"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="@string/announcement_mode_off"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/detailModeButton"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="@string/announcement_mode_detail"
+            android:textSize="12sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/titleOnlyModeButton"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:minWidth="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="@string/announcement_mode_title_only"
+            android:textSize="12sp" />
+
+    </com.google.android.material.button.MaterialButtonToggleGroup>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
-
