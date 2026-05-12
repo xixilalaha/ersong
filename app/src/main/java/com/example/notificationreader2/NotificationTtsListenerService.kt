@@ -117,7 +117,7 @@ class NotificationTtsListenerService : NotificationListenerService() {
 
         // MIUI/部分 ROM 会限制后台绑定 TTS，引导到前台服务朗读更稳定。
         // 同一条聚合通知快速更新时，用 notification key 合并尚未播报的旧版本。
-        TtsForegroundService.start(applicationContext, announcements, sbn.key)
+        TtsForegroundService.start(applicationContext, announcements, sbn.key, sbn.packageName)
     }
 
     private fun extractAnnouncements(

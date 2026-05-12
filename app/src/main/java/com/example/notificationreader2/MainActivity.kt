@@ -39,6 +39,9 @@ class MainActivity : AppCompatActivity() {
     private val requestPostNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    private val requestReadPhoneState =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     private lateinit var adapter: AppToggleAdapter
     private var audioManager: AudioManager? = null
     private var deviceCallback: AudioDeviceCallback? = null
@@ -56,6 +59,14 @@ class MainActivity : AppCompatActivity() {
             if (!granted) {
                 requestPostNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             }
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.READ_PHONE_STATE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestReadPhoneState.launch(android.Manifest.permission.READ_PHONE_STATE)
         }
 
         setupMasterSwitch()

@@ -1,15 +1,21 @@
 package com.example.notificationreader2
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
 class TtsForegroundService : Service() {
 
@@ -24,6 +30,17 @@ class TtsForegroundService : Service() {
     private var retryRunnable: Runnable? = null
     private var lastStartId: Int = 0
     private var currentEnginePkg: String? = null
+    /** 当前正在朗读的条目所属通知包名（用于接听电话后取消「电话播报」） */
+    private var currentlySpeakingSourcePackage: String? = null
+    /** API 31+ 为 [TelephonyCallback]；否则为 [PhoneStateListener] */
+    private var callStateListenerHolder: Any? = null
+
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    private val legacyCallStateListener: PhoneStateListener = object : PhoneStateListener() {
+        override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+            handler.post { onCallStateChangedInternal(state) }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -42,6 +59,8 @@ class TtsForegroundService : Service() {
         retryRunnable = null
         queue.clear()
         isSpeaking = false
+        currentlySpeakingSourcePackage = null
+        unregisterCallStateListener()
         // MIUI TTS 的完成回调可能早于真实音频尾音，销毁时再多留一点缓冲。
         val sp = speaker
         speaker = null
@@ -57,6 +76,7 @@ class TtsForegroundService : Service() {
         val text = intent?.getStringExtra(EXTRA_TEXT).orEmpty()
         val texts = intent?.getStringArrayListExtra(EXTRA_TEXTS).orEmpty()
         val collapseKey = intent?.getStringExtra(EXTRA_COLLAPSE_KEY)
+        val sourcePackage = intent?.getStringExtra(EXTRA_SOURCE_PACKAGE)
         val incoming = when {
             texts.isNotEmpty() -> texts.filter { it.isNotBlank() }
             text.isNotBlank() -> listOf(text)
@@ -92,7 +112,7 @@ class TtsForegroundService : Service() {
         rebuildSpeakerIfNeeded(desired = desiredEngineFromPrefs(), force = false)
 
         if (incoming.isNotEmpty()) {
-            enqueue(collapseKey, incoming)
+            enqueue(collapseKey, incoming, sourcePackage)
         }
 
         // 有新内容进来就取消停止计划
@@ -112,23 +132,26 @@ class TtsForegroundService : Service() {
         retryRunnable = null
         queue.clear()
         isSpeaking = false
+        currentlySpeakingSourcePackage = null
         speaker?.stopNow()
+        unregisterCallStateListener()
         stopSelf()
     }
 
-    private fun enqueue(collapseKey: String?, texts: List<String>) {
+    private fun enqueue(collapseKey: String?, texts: List<String>, sourcePackage: String?) {
         if (!collapseKey.isNullOrBlank()) {
             queue.removeAll { it.collapseKey == collapseKey }
         }
 
         for (text in texts) {
-            queue.addLast(QueueItem(collapseKey = collapseKey, text = text))
+            queue.addLast(QueueItem(collapseKey = collapseKey, text = text, sourcePackage = sourcePackage))
         }
 
         while (queue.size > MAX_QUEUE_ITEMS) {
             val dropped = queue.removeFirst()
             Log.d(TAG, "drop old pending utterance collapseKey=${dropped.collapseKey}")
         }
+        syncCallStateListenerRegistration()
     }
 
     private fun desiredEngineFromPrefs(): String? {
@@ -149,6 +172,7 @@ class TtsForegroundService : Service() {
     }
 
     private fun speakNextIfIdle() {
+        syncCallStateListenerRegistration()
         if (isSpeaking) return
         val next = queue.firstOrNull() ?: run {
             scheduleStop()
@@ -175,12 +199,14 @@ class TtsForegroundService : Service() {
         // 真正开始播报前再出队
         queue.removeFirst()
         isSpeaking = true
+        currentlySpeakingSourcePackage = next.sourcePackage
 
         // 看门狗：避免某些引擎不回调 onDone 导致队列卡死
         speakWatchdog?.let { handler.removeCallbacks(it) }
         val wd = Runnable {
             Log.w(TAG, "speak watchdog timeout, force next")
             isSpeaking = false
+            currentlySpeakingSourcePackage = null
             speakWatchdog = null
             speakNextIfIdle()
         }
@@ -193,8 +219,9 @@ class TtsForegroundService : Service() {
         handler.postDelayed({
             val spNow = speaker
             if (spNow == null || !spNow.isReady()) {
-                queue.addFirst(QueueItem(collapseKey = next.collapseKey, text = textToSpeak))
+                queue.addFirst(QueueItem(collapseKey = next.collapseKey, text = textToSpeak, sourcePackage = next.sourcePackage))
                 isSpeaking = false
+                currentlySpeakingSourcePackage = null
                 speakWatchdog?.let { handler.removeCallbacks(it) }
                 speakWatchdog = null
                 speakNextIfIdle()
@@ -203,12 +230,93 @@ class TtsForegroundService : Service() {
             spNow.speak(textToSpeak) {
                 handler.post {
                     isSpeaking = false
+                    currentlySpeakingSourcePackage = null
                     speakWatchdog?.let { handler.removeCallbacks(it) }
                     speakWatchdog = null
                     speakNextIfIdle()
                 }
             }
         }, 80L)
+    }
+
+    private fun hasCallRelatedPlaybackWork(): Boolean {
+        if (CallAnnouncementPackages.isCallAnnouncementPackage(currentlySpeakingSourcePackage)) return true
+        return queue.any { CallAnnouncementPackages.isCallAnnouncementPackage(it.sourcePackage) }
+    }
+
+    private fun syncCallStateListenerRegistration() {
+        if (hasCallRelatedPlaybackWork()) {
+            registerCallStateListenerIfPossible()
+        } else {
+            unregisterCallStateListener()
+        }
+    }
+
+    private fun registerCallStateListenerIfPossible() {
+        if (callStateListenerHolder != null) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val tm = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                    override fun onCallStateChanged(state: Int) {
+                        handler.post { onCallStateChangedInternal(state) }
+                    }
+                }
+                tm.registerTelephonyCallback(mainExecutor, cb)
+                callStateListenerHolder = cb
+            } else {
+                @Suppress("DEPRECATION")
+                tm.listen(legacyCallStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+                callStateListenerHolder = legacyCallStateListener
+            }
+            Log.d(TAG, "telephony call-state listener registered")
+        } catch (t: Throwable) {
+            Log.w(TAG, "register telephony listener failed", t)
+        }
+    }
+
+    private fun unregisterCallStateListener() {
+        val holder = callStateListenerHolder ?: return
+        callStateListenerHolder = null
+        val tm = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
+        try {
+            when (holder) {
+                is TelephonyCallback -> tm.unregisterTelephonyCallback(holder)
+                is PhoneStateListener -> {
+                    @Suppress("DEPRECATION")
+                    tm.listen(holder, PhoneStateListener.LISTEN_NONE)
+                }
+            }
+            Log.d(TAG, "telephony call-state listener unregistered")
+        } catch (t: Throwable) {
+            Log.w(TAG, "unregister telephony listener failed", t)
+        }
+    }
+
+    private fun onCallStateChangedInternal(state: Int) {
+        if (state != TelephonyManager.CALL_STATE_OFFHOOK) return
+        if (!hasCallRelatedPlaybackWork()) return
+        Log.d(TAG, "CALL_STATE_OFFHOOK: cancel call-related TTS")
+        cancelCallAnnouncementsDueToCallOffHook()
+        speakNextIfIdle()
+    }
+
+    private fun cancelCallAnnouncementsDueToCallOffHook() {
+        queue.removeAll { CallAnnouncementPackages.isCallAnnouncementPackage(it.sourcePackage) }
+        val speakingCall =
+            CallAnnouncementPackages.isCallAnnouncementPackage(currentlySpeakingSourcePackage)
+        if (isSpeaking && speakingCall) {
+            speakWatchdog?.let { handler.removeCallbacks(it) }
+            speakWatchdog = null
+            speaker?.stopNow()
+            isSpeaking = false
+            currentlySpeakingSourcePackage = null
+        }
     }
 
     private fun scheduleStop() {
@@ -265,6 +373,7 @@ class TtsForegroundService : Service() {
         private const val EXTRA_ENGINE = "extra_engine"
         private const val EXTRA_TEXTS = "extra_texts"
         private const val EXTRA_COLLAPSE_KEY = "extra_collapse_key"
+        private const val EXTRA_SOURCE_PACKAGE = "extra_source_pkg"
         const val EXTRA_TEXT = "extra_text"
 
         fun start(context: Context, text: String) {
@@ -278,11 +387,12 @@ class TtsForegroundService : Service() {
             }
         }
 
-        fun start(context: Context, texts: List<String>, collapseKey: String?) {
+        fun start(context: Context, texts: List<String>, collapseKey: String?, sourcePackage: String?) {
             if (texts.isEmpty()) return
             val i = Intent(context, TtsForegroundService::class.java).apply {
                 putStringArrayListExtra(EXTRA_TEXTS, ArrayList(texts))
                 putExtra(EXTRA_COLLAPSE_KEY, collapseKey)
+                putExtra(EXTRA_SOURCE_PACKAGE, sourcePackage)
             }
             if (Build.VERSION.SDK_INT >= 26) {
                 context.startForegroundService(i)
@@ -313,6 +423,7 @@ class TtsForegroundService : Service() {
 
     private data class QueueItem(
         val collapseKey: String?,
-        val text: String
+        val text: String,
+        val sourcePackage: String?
     )
 }
