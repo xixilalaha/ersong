@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        ReadAloudPrefs.ensureInitialManagedAppsConfigured(this)
 
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             val granted = ContextCompat.checkSelfPermission(
@@ -341,25 +342,25 @@ class MainActivity : AppCompatActivity() {
         lateinit var adapter: AppToggleAdapter
         var showNotifiedApps = false
         val launcherApps = getSystemService(LauncherApps::class.java)
-        val commonNotificationPkgs = listOf(
-            "com.tencent.mm",              // 微信
-            "com.tencent.wework",          // 企业微信
-            "com.android.incallui",        // AOSP/部分 ROM 来电界面
-            "com.android.server.telecom",  // 系统通话通知
-            "com.android.phone",           // 电话服务
-            "com.android.contacts",        // 通讯录/拨号
-            "com.google.android.dialer",   // Google 电话
-            "com.miui.contacts",           // MIUI 通讯录与拨号
-            "com.miui.telecom"             // MIUI 通话组件
-        )
+        val commonNotificationPkgs = ReadAloudPrefs.commonNotificationPickerPackages()
+        val manageListCollator = Collator.getInstance(Locale.CHINA).apply {
+            strength = Collator.PRIMARY
+        }
+        fun compareManageAppItems(a: AppToggleItem, b: AppToggleItem): Int {
+            val byName = manageListCollator.compare(a.appName, b.appName)
+            if (byName != 0) return byName
+            return a.packageName.compareTo(b.packageName)
+        }
 
         fun fallbackAppName(pkg: String): String {
             return when (pkg) {
+                "com.tencent.mobileqq" -> "QQ"
                 "com.tencent.mm" -> "微信"
                 "com.tencent.wework" -> "企业微信"
                 "com.android.incallui" -> "来电界面"
                 "com.android.server.telecom" -> "系统通话"
                 "com.android.phone" -> "电话服务"
+                "com.android.mms" -> "短信"
                 "com.android.contacts" -> "通讯录与拨号"
                 "com.google.android.dialer" -> "电话"
                 "com.miui.contacts" -> "通讯录与拨号"
@@ -525,10 +526,7 @@ class MainActivity : AppCompatActivity() {
 
             val selectedItems = selectedPkgs.mapNotNull { p ->
                 buildToggleItem(p, allowUnselectedSystem = false)
-            }.sortedWith { a, b ->
-                if (a.enabled != b.enabled) return@sortedWith if (a.enabled) -1 else 1
-                a.appName.compareTo(b.appName)
-            }
+            }.sortedWith(::compareManageAppItems)
 
             val notifiedItems = knownPkgs
                 .asSequence()
@@ -538,7 +536,7 @@ class MainActivity : AppCompatActivity() {
                 .filter { it !in selectedPkgs }
                 .distinct()
                 .mapNotNull { p -> buildToggleItem(p, allowUnselectedSystem = true) }
-                .sortedBy { it.appName }
+                .sortedWith(::compareManageAppItems)
                 .toList()
 
             emptyText.visibility =

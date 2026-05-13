@@ -11,6 +11,8 @@ object ReadAloudPrefs {
     private const val KEY_MANUAL_INCLUDED = "read_aloud_manual_included"
     private const val KEY_HIDDEN = "read_aloud_hidden"
     private const val KEY_ANNOUNCEMENT_MODE_PREFIX = "read_aloud_announcement_mode_"
+    /** 仅执行一次：为内置通讯应用写入默认「新消息提醒」并加入手动列表，便于首次打开即可管理 */
+    private const val KEY_INITIAL_MANAGED_APPS_DONE = "read_aloud_initial_managed_apps_v1"
 
     enum class PlaybackRouteMode {
         /** 仅已连接蓝牙耳机等蓝牙音频设备时播报 */
@@ -168,6 +170,50 @@ object ReadAloudPrefs {
             PlaybackRouteMode.NORMAL -> "normal"
         }
         sp.edit().putString(KEY_PLAYBACK_ROUTE, value).apply()
+    }
+
+    /**
+     * 管理「朗读应用」底部表时，始终纳入候选的常见通讯类包名（含 QQ / 微信 / 短信 / 电话相关）。
+     * 与 [ensureInitialManagedAppsConfigured] 中的「首启五项」一致并含各 ROM 常见变体。
+     */
+    fun commonNotificationPickerPackages(): List<String> = listOf(
+        "com.tencent.mobileqq",
+        "com.tencent.mm",
+        "com.tencent.wework",
+        "com.android.incallui",
+        "com.android.server.telecom",
+        "com.android.phone",
+        "com.android.mms",
+        "com.android.contacts",
+        "com.google.android.dialer",
+        "com.miui.contacts",
+        "com.miui.telecom",
+    )
+
+    /**
+     * 首次进入应用时：将 QQ、微信、电话、电话服务、短信 五项加入手动管理列表，
+     * 且若用户尚未为该包选择过播报样式，则默认为「新消息提醒」（[AnnouncementMode.TITLE_ONLY]）。
+     * 不自动开启「开启通知播报」总开关，也不自动勾选各应用朗读开关。
+     */
+    fun ensureInitialManagedAppsConfigured(context: Context) {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        migrateIfNeeded(sp)
+        if (sp.getBoolean(KEY_INITIAL_MANAGED_APPS_DONE, false)) return
+
+        val seed = listOf(
+            "com.tencent.mobileqq",
+            "com.tencent.mm",
+            "com.google.android.dialer",
+            "com.android.phone",
+            "com.android.mms",
+        )
+        for (pkg in seed) {
+            if (sp.getString(announcementModeKey(pkg), null) == null) {
+                setAnnouncementMode(context, pkg, AnnouncementMode.TITLE_ONLY)
+            }
+        }
+        addManualIncludedPackages(context, seed)
+        sp.edit().putBoolean(KEY_INITIAL_MANAGED_APPS_DONE, true).apply()
     }
 
     private fun migrateIfNeeded(sp: android.content.SharedPreferences) {

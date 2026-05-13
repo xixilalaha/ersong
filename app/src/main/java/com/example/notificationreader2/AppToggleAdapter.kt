@@ -105,15 +105,23 @@ class AppToggleAdapter(
                     return@addOnButtonCheckedListener
                 }
 
-                if (!item.enabled) {
-                    item.enabled = true
-                    onToggle(item.packageName, true)
-                }
-
                 val mode = when (checkedId) {
                     R.id.titleOnlyModeButton -> ReadAloudPrefs.AnnouncementMode.TITLE_ONLY
                     else -> ReadAloudPrefs.AnnouncementMode.DETAIL
                 }
+
+                // 从「关闭」点到「详细/新消息」时，onToggle 会 refresh；须先把模式写入 prefs，
+                // 否则 refresh 仍读到旧模式，界面会错显示成「新消息提醒」。
+                if (!item.enabled) {
+                    if (item.announcementMode != mode) {
+                        item.announcementMode = mode
+                        onModeChange(item.packageName, mode)
+                    }
+                    item.enabled = true
+                    onToggle(item.packageName, true)
+                    return@addOnButtonCheckedListener
+                }
+
                 if (item.announcementMode == mode) return@addOnButtonCheckedListener
                 item.announcementMode = mode
                 onModeChange(item.packageName, mode)
