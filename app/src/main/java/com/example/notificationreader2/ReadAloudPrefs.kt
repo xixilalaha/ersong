@@ -8,6 +8,8 @@ object ReadAloudPrefs {
     private const val KEY_ENABLED = "read_aloud_enabled"
     private const val KEY_KNOWN = "known_notification_apps"
     private const val KEY_PLAYBACK_ROUTE = "read_aloud_playback_route"
+    /** 开启后仅在锁屏界面或息屏时播报；亮屏且已解锁时不播报 */
+    private const val KEY_ONLY_LOCKED_OR_SCREEN_OFF = "read_aloud_only_locked_or_screen_off"
     private const val KEY_MANUAL_INCLUDED = "read_aloud_manual_included"
     private const val KEY_HIDDEN = "read_aloud_hidden"
     private const val KEY_ANNOUNCEMENT_MODE_PREFIX = "read_aloud_announcement_mode_"
@@ -170,6 +172,16 @@ object ReadAloudPrefs {
             PlaybackRouteMode.NORMAL -> "normal"
         }
         sp.edit().putString(KEY_PLAYBACK_ROUTE, value).apply()
+    }
+
+    fun isOnlyLockedOrScreenOffEnabled(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return sp.getBoolean(KEY_ONLY_LOCKED_OR_SCREEN_OFF, false)
+    }
+
+    fun setOnlyLockedOrScreenOffEnabled(context: Context, enabled: Boolean) {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        sp.edit().putBoolean(KEY_ONLY_LOCKED_OR_SCREEN_OFF, enabled).apply()
     }
 
     /**

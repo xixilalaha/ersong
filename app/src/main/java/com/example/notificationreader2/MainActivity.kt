@@ -46,6 +46,7 @@ class MainActivity : AppCompatActivity() {
     private var audioManager: AudioManager? = null
     private var deviceCallback: AudioDeviceCallback? = null
     private var syncingMasterSwitch: Boolean = false
+    private var syncingLockedScreenSwitch: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupMasterSwitch()
+        setupOnlyLockedOrScreenOffSwitch()
 
         findViewById<MaterialButton>(R.id.openAccessButton).setOnClickListener {
             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
@@ -213,6 +215,14 @@ class MainActivity : AppCompatActivity() {
             syncingMasterSwitch = false
         }
 
+        val lockedSwitch = findViewById<SwitchMaterial>(R.id.onlyLockedOrScreenOffSwitch)
+        val lockedPref = ReadAloudPrefs.isOnlyLockedOrScreenOffEnabled(this)
+        if (lockedSwitch.isChecked != lockedPref) {
+            syncingLockedScreenSwitch = true
+            lockedSwitch.isChecked = lockedPref
+            syncingLockedScreenSwitch = false
+        }
+
         val tv = findViewById<com.google.android.material.textview.MaterialTextView>(R.id.headsetStatusText)
         when (ReadAloudPrefs.getPlaybackRouteMode(this)) {
             ReadAloudPrefs.PlaybackRouteMode.BLUETOOTH -> {
@@ -252,6 +262,15 @@ class MainActivity : AppCompatActivity() {
                 TtsForegroundService.stopAll(this)
                 Toast.makeText(this, "通知播报已关闭", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    private fun setupOnlyLockedOrScreenOffSwitch() {
+        val sw = findViewById<SwitchMaterial>(R.id.onlyLockedOrScreenOffSwitch)
+        sw.isChecked = ReadAloudPrefs.isOnlyLockedOrScreenOffEnabled(this)
+        sw.setOnCheckedChangeListener { _, isChecked ->
+            if (syncingLockedScreenSwitch) return@setOnCheckedChangeListener
+            ReadAloudPrefs.setOnlyLockedOrScreenOffEnabled(this, isChecked)
         }
     }
 

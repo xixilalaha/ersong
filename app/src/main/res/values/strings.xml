@@ -3,6 +3,8 @@
     <string name="open_notification_access">打开通知权限</string>
     <string name="notification_access_hint">请在系统设置中开启“通知使用权”，应用才能朗读通知。</string>
     <string name="master_read_aloud_switch">开启通知播报</string>
+    <string name="only_locked_or_screen_off_switch">仅在锁屏或息屏时播报</string>
+    <string name="screen_off_battery_hint">若息屏时很少或无法播报，请在系统设置中为本应用关闭省电限制（允许后台活动 / 无限制），并允许自启动。部分机型需在「应用管理」「电池」或厂商「手机管家」中设置，菜单位置因品牌而异。</string>
     <string name="missing_permissions_title">无法开启播报</string>
     <string name="missing_permissions_message">请先开启以下权限：\n%1$s</string>
     <string name="permission_notification_access">通知使用权</string>

@@ -32,17 +32,44 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/hintText" />
 
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/onlyLockedOrScreenOffSwitch"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginTop="12dp"
+        android:text="@string/only_locked_or_screen_off_switch"
+        android:textAppearance="?attr/textAppearanceBodyLarge"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/masterReadSwitch" />
+
+    <com.google.android.material.textview.MaterialTextView
+        android:id="@+id/screenOffBatteryHintText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginTop="8dp"
+        android:text="@string/screen_off_battery_hint"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:textColor="?android:attr/textColorSecondary"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/onlyLockedOrScreenOffSwitch" />
+
     <com.google.android.material.button.MaterialButton
         android:id="@+id/openAccessButton"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
-        android:layout_marginTop="20dp"
+        android:layout_marginTop="16dp"
         android:text="@string/open_notification_access"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/masterReadSwitch" />
+        app:layout_constraintTop_toBottomOf="@id/screenOffBatteryHintText" />
 
     <com.google.android.material.textview.MaterialTextView
         android:id="@+id/ttsHintText"

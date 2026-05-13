@@ -96,6 +96,13 @@ class NotificationTtsListenerService : NotificationListenerService() {
             }
         }
 
+        if (ReadAloudPrefs.isOnlyLockedOrScreenOffEnabled(applicationContext)) {
+            if (!PlaybackEnvironmentGate.shouldAcceptNewPlayback(applicationContext)) {
+                Log.d(TAG, "skip unlocked interactive screen pkg=$pkg")
+                return
+            }
+        }
+
         Log.d(TAG, "processNotification source=$source pkg=${pkg} id=${sbn.id} ongoing=${sbn.isOngoing}")
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return

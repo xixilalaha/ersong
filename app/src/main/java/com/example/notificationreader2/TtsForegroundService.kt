@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
@@ -34,6 +36,8 @@ class TtsForegroundService : Service() {
     private var currentlySpeakingSourcePackage: String? = null
     /** API 31+ 为 [TelephonyCallback]；否则为 [PhoneStateListener] */
     private var callStateListenerHolder: Any? = null
+    /** 用户解锁后清空待播队列（当前句仍播完），见 [ReadAloudPrefs.isOnlyLockedOrScreenOffEnabled] */
+    private var userUnlockReceiver: BroadcastReceiver? = null
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     private val legacyCallStateListener: PhoneStateListener = object : PhoneStateListener() {
@@ -46,6 +50,7 @@ class TtsForegroundService : Service() {
         super.onCreate()
         Log.d(TAG, "onCreate")
         ensureChannel()
+        registerUserUnlockReceiver()
         rebuildSpeakerIfNeeded(desired = desiredEngineFromPrefs(), force = true)
     }
 
@@ -60,6 +65,7 @@ class TtsForegroundService : Service() {
         queue.clear()
         isSpeaking = false
         currentlySpeakingSourcePackage = null
+        unregisterUserUnlockReceiver()
         unregisterCallStateListener()
         // MIUI TTS 的完成回调可能早于真实音频尾音，销毁时再多留一点缓冲。
         val sp = speaker
@@ -112,7 +118,13 @@ class TtsForegroundService : Service() {
         rebuildSpeakerIfNeeded(desired = desiredEngineFromPrefs(), force = false)
 
         if (incoming.isNotEmpty()) {
-            enqueue(collapseKey, incoming, sourcePackage)
+            if (ReadAloudPrefs.isOnlyLockedOrScreenOffEnabled(applicationContext) &&
+                !PlaybackEnvironmentGate.shouldAcceptNewPlayback(applicationContext)
+            ) {
+                Log.d(TAG, "skip enqueue: screen on and unlocked")
+            } else {
+                enqueue(collapseKey, incoming, sourcePackage)
+            }
         }
 
         // 有新内容进来就取消停止计划
@@ -134,8 +146,59 @@ class TtsForegroundService : Service() {
         isSpeaking = false
         currentlySpeakingSourcePackage = null
         speaker?.stopNow()
+        unregisterUserUnlockReceiver()
         unregisterCallStateListener()
         stopSelf()
+    }
+
+    private fun registerUserUnlockReceiver() {
+        if (userUnlockReceiver != null) return
+        userUnlockReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                handler.post { onUserUnlockBroadcast(intent?.action) }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_USER_PRESENT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                addAction(Intent.ACTION_USER_UNLOCKED)
+            }
+        }
+        ContextCompat.registerReceiver(
+            this,
+            userUnlockReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    private fun unregisterUserUnlockReceiver() {
+        val r = userUnlockReceiver ?: return
+        try {
+            unregisterReceiver(r)
+        } catch (_: Throwable) {
+        }
+        userUnlockReceiver = null
+    }
+
+    private fun onUserUnlockBroadcast(action: String?) {
+        if (!ReadAloudPrefs.isOnlyLockedOrScreenOffEnabled(applicationContext)) return
+        val ok = when (action) {
+            Intent.ACTION_USER_PRESENT -> true
+            Intent.ACTION_USER_UNLOCKED -> true
+            else -> false
+        }
+        if (!ok) return
+        drainPendingQueueDueToUserUnlock()
+    }
+
+    /** 解锁后不中断当前句，仅丢弃队列中尚未开始的条目 */
+    private fun drainPendingQueueDueToUserUnlock() {
+        val n = queue.size
+        if (n == 0) return
+        queue.clear()
+        Log.d(TAG, "user unlocked: cleared pending queue (dropped $n)")
+        syncCallStateListenerRegistration()
     }
 
     private fun enqueue(collapseKey: String?, texts: List<String>, sourcePackage: String?) {
