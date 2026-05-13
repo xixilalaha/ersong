@@ -216,10 +216,31 @@ class NotificationTtsListenerService : NotificationListenerService() {
             if (iterator.next().value < cutoff) iterator.remove()
         }
 
-        val key = "$notificationKey|$postTime|$text"
-        if (recentSpoken.containsKey(key)) return false
+        // 微信等 MessagingStyle 通知常在同一摘要上连续多次 onNotificationPosted，且 postTime 每次刷新。
+        // 若去重键含 postTime，同一句正文会被当成「新通知」重复入队。详情类播报用 key+正文 即可。
+        // 「仅新消息」模式多条文案相同，仍须带 postTime 区分。
+        val key = dedupeKey(notificationKey, postTime, text)
+        if (recentSpoken.containsKey(key)) {
+            Log.d(TAG, "dedupe skip key=${key.take(120)}")
+            return false
+        }
         recentSpoken[key] = now
         return true
+    }
+
+    /** 与 [formatNewMessageOnly] 一致：应用名 +「你有一条新消息」，不含详情里的「：」。 */
+    private fun isGenericNewMessageOnlyAnnouncement(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return false
+        return t.contains("你有一条新消息") && !t.contains("：")
+    }
+
+    private fun dedupeKey(notificationKey: String, postTime: Long, text: String): String {
+        return if (isGenericNewMessageOnlyAnnouncement(text)) {
+            "$notificationKey|$postTime|$text"
+        } else {
+            "$notificationKey|$text"
+        }
     }
 
     companion object {
