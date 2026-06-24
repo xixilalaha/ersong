@@ -279,6 +279,13 @@ class MainActivity : AppCompatActivity() {
         if (!isNotificationListenerEnabled()) {
             missing.add(getString(R.string.permission_notification_access))
         }
+        val phoneStateGranted = ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.READ_PHONE_STATE
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!phoneStateGranted) {
+            missing.add(getString(R.string.permission_read_phone_state))
+        }
         if (Build.VERSION.SDK_INT >= 33) {
             val granted = ContextCompat.checkSelfPermission(
                 this,
@@ -306,6 +313,12 @@ class MainActivity : AppCompatActivity() {
                         Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     )
+                } else if (ContextCompat.checkSelfPermission(
+                        this,
+                        android.Manifest.permission.READ_PHONE_STATE
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    requestReadPhoneState.launch(android.Manifest.permission.READ_PHONE_STATE)
                 } else if (Build.VERSION.SDK_INT >= 33) {
                     openAppNotificationSettings()
                 }

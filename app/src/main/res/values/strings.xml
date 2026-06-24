@@ -8,6 +8,7 @@
     <string name="missing_permissions_title">无法开启播报</string>
     <string name="missing_permissions_message">请先开启以下权限：\n%1$s</string>
     <string name="permission_notification_access">通知使用权</string>
+    <string name="permission_read_phone_state">电话状态权限</string>
     <string name="permission_post_notifications">通知权限</string>
     <string name="open_settings">去设置</string>
     <string name="open_tts_settings">打开 TTS 设置</string>

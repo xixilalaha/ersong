@@ -88,6 +88,11 @@ class NotificationTtsListenerService : NotificationListenerService() {
             return
         }
 
+        if (CallStateUtils.isCallActive(applicationContext)) {
+            Log.d(TAG, "skip during phone call pkg=$pkg")
+            return
+        }
+
         // 蓝牙模式：仅连接蓝牙音频输出时才朗读；正常模式不限制路由
         if (ReadAloudPrefs.getPlaybackRouteMode(applicationContext) == ReadAloudPrefs.PlaybackRouteMode.BLUETOOTH) {
             if (!AudioRouteUtils.isBluetoothHeadsetConnected(applicationContext)) {

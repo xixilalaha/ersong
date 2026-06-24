@@ -1,6 +1,7 @@
 package com.example.notificationreader2
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -99,6 +100,17 @@ class TtsSpeaker(
                 }
             })
             listenerInstalled = true
+        }
+
+        try {
+            engine.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+        } catch (t: Throwable) {
+            Log.w(tag, "set audio attributes failed", t)
         }
 
         val candidates = listOf(

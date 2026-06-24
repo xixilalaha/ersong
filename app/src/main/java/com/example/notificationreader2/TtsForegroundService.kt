@@ -10,6 +10,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import android.telephony.PhoneStateListener
@@ -32,6 +35,25 @@ class TtsForegroundService : Service() {
     private var retryRunnable: Runnable? = null
     private var lastStartId: Int = 0
     private var currentEnginePkg: String? = null
+    private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    private val speechAudioAttributes by lazy {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+    }
+    private val duckingFocusRequest by lazy {
+        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(speechAudioAttributes)
+            .setAcceptsDelayedFocusGain(false)
+            .setForceDucking(true)
+            .setWillPauseWhenDucked(false)
+            .setOnAudioFocusChangeListener({ change ->
+                Log.d(TAG, "audio focus change=$change")
+            }, handler)
+            .build()
+    }
+    private var hasDuckingAudioFocus: Boolean = false
     /** 当前正在朗读的条目所属通知包名（用于接听电话后取消「电话播报」） */
     private var currentlySpeakingSourcePackage: String? = null
     /** API 31+ 为 [TelephonyCallback]；否则为 [PhoneStateListener] */
@@ -65,6 +87,7 @@ class TtsForegroundService : Service() {
         queue.clear()
         isSpeaking = false
         currentlySpeakingSourcePackage = null
+        abandonDuckingAudioFocus()
         unregisterUserUnlockReceiver()
         unregisterCallStateListener()
         // MIUI TTS 的完成回调可能早于真实音频尾音，销毁时再多留一点缓冲。
@@ -114,6 +137,12 @@ class TtsForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        if (CallStateUtils.isCallActive(applicationContext)) {
+            Log.d(TAG, "skip incoming because phone call is active")
+            stopAllPlaybackAndSelf()
+            return START_NOT_STICKY
+        }
+
         // 兜底：即使没有显式 reload，也确保当前 speaker 使用最新选择的引擎
         rebuildSpeakerIfNeeded(desired = desiredEngineFromPrefs(), force = false)
 
@@ -146,6 +175,7 @@ class TtsForegroundService : Service() {
         isSpeaking = false
         currentlySpeakingSourcePackage = null
         speaker?.stopNow()
+        abandonDuckingAudioFocus()
         unregisterUserUnlockReceiver()
         unregisterCallStateListener()
         stopSelf()
@@ -237,11 +267,18 @@ class TtsForegroundService : Service() {
     private fun speakNextIfIdle() {
         syncCallStateListenerRegistration()
         if (isSpeaking) return
+        if (CallStateUtils.isCallActive(applicationContext)) {
+            Log.d(TAG, "cancel playback because phone call is active before speak")
+            stopAllPlaybackAndSelf()
+            return
+        }
         val next = queue.firstOrNull() ?: run {
+            abandonDuckingAudioFocus()
             scheduleStop()
             return
         }
         val sp = speaker ?: run {
+            abandonDuckingAudioFocus()
             scheduleStop()
             return
         }
@@ -271,6 +308,7 @@ class TtsForegroundService : Service() {
             isSpeaking = false
             currentlySpeakingSourcePackage = null
             speakWatchdog = null
+            abandonDuckingAudioFocus()
             speakNextIfIdle()
         }
         speakWatchdog = wd
@@ -287,28 +325,59 @@ class TtsForegroundService : Service() {
                 currentlySpeakingSourcePackage = null
                 speakWatchdog?.let { handler.removeCallbacks(it) }
                 speakWatchdog = null
+                abandonDuckingAudioFocus()
                 speakNextIfIdle()
                 return@postDelayed
             }
+            requestDuckingAudioFocus()
             spNow.speak(textToSpeak) {
                 handler.post {
                     isSpeaking = false
                     currentlySpeakingSourcePackage = null
                     speakWatchdog?.let { handler.removeCallbacks(it) }
                     speakWatchdog = null
+                    if (queue.isEmpty()) {
+                        abandonDuckingAudioFocus()
+                    }
                     speakNextIfIdle()
                 }
             }
         }, 80L)
     }
 
-    private fun hasCallRelatedPlaybackWork(): Boolean {
-        if (CallAnnouncementPackages.isCallAnnouncementPackage(currentlySpeakingSourcePackage)) return true
-        return queue.any { CallAnnouncementPackages.isCallAnnouncementPackage(it.sourcePackage) }
+    private fun requestDuckingAudioFocus() {
+        if (hasDuckingAudioFocus) return
+        val result = try {
+            audioManager.requestAudioFocus(duckingFocusRequest)
+        } catch (t: Throwable) {
+            Log.w(TAG, "request audio focus failed", t)
+            AudioManager.AUDIOFOCUS_REQUEST_FAILED
+        }
+        hasDuckingAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        if (hasDuckingAudioFocus) {
+            Log.d(TAG, "ducking audio focus granted")
+        } else {
+            Log.w(TAG, "ducking audio focus not granted result=$result")
+        }
+    }
+
+    private fun abandonDuckingAudioFocus() {
+        if (!hasDuckingAudioFocus) return
+        try {
+            audioManager.abandonAudioFocusRequest(duckingFocusRequest)
+        } catch (t: Throwable) {
+            Log.w(TAG, "abandon audio focus failed", t)
+        }
+        hasDuckingAudioFocus = false
+        Log.d(TAG, "ducking audio focus abandoned")
+    }
+
+    private fun hasPlaybackWork(): Boolean {
+        return isSpeaking || queue.isNotEmpty()
     }
 
     private fun syncCallStateListenerRegistration() {
-        if (hasCallRelatedPlaybackWork()) {
+        if (hasPlaybackWork()) {
             registerCallStateListenerIfPossible()
         } else {
             unregisterCallStateListener()
@@ -362,24 +431,10 @@ class TtsForegroundService : Service() {
     }
 
     private fun onCallStateChangedInternal(state: Int) {
-        if (state != TelephonyManager.CALL_STATE_OFFHOOK) return
-        if (!hasCallRelatedPlaybackWork()) return
-        Log.d(TAG, "CALL_STATE_OFFHOOK: cancel call-related TTS")
-        cancelCallAnnouncementsDueToCallOffHook()
-        speakNextIfIdle()
-    }
-
-    private fun cancelCallAnnouncementsDueToCallOffHook() {
-        queue.removeAll { CallAnnouncementPackages.isCallAnnouncementPackage(it.sourcePackage) }
-        val speakingCall =
-            CallAnnouncementPackages.isCallAnnouncementPackage(currentlySpeakingSourcePackage)
-        if (isSpeaking && speakingCall) {
-            speakWatchdog?.let { handler.removeCallbacks(it) }
-            speakWatchdog = null
-            speaker?.stopNow()
-            isSpeaking = false
-            currentlySpeakingSourcePackage = null
-        }
+        if (!CallStateUtils.isActiveState(state)) return
+        if (!hasPlaybackWork()) return
+        Log.d(TAG, "phone call state=$state: cancel TTS playback")
+        stopAllPlaybackAndSelf()
     }
 
     private fun scheduleStop() {
