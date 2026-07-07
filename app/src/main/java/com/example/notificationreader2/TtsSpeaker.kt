@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.util.Log
 import android.provider.Settings
 import java.util.Locale
@@ -28,8 +29,15 @@ class TtsSpeaker(
     private val doneCallbacks: ConcurrentHashMap<String, () -> Unit> = ConcurrentHashMap()
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var listenerInstalled: Boolean = false
+    @Volatile private var stableVoice: Voice? = null
+    @Volatile private var speakCountSinceInit: Int = 0
 
     fun isReady(): Boolean = ready
+
+    fun shouldRefreshAfterSpeak(): Boolean {
+        val ageMs = System.currentTimeMillis() - createdAtMs
+        return speakCountSinceInit >= MAX_SPEAKS_PER_SESSION || ageMs >= MAX_SESSION_AGE_MS
+    }
 
     init {
         startInit("init")
@@ -38,6 +46,10 @@ class TtsSpeaker(
     private fun startInit(reason: String) {
         initAttempts += 1
         createdAtMs = System.currentTimeMillis()
+        ready = false
+        listenerInstalled = false
+        stableVoice = null
+        speakCountSinceInit = 0
         val override = engineOverride?.takeIf { it.isNotBlank() }
         val prefEngine = try {
             appContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
@@ -129,7 +141,14 @@ class TtsSpeaker(
             }
         }
         ready = ok
-        Log.d(tag, "TTS setLanguage zh result=$lastResult ready=$ready")
+        resetVoiceParams(engine)
+        stableVoice = try {
+            engine.voice
+        } catch (t: Throwable) {
+            Log.w(tag, "capture voice failed", t)
+            null
+        }
+        Log.d(tag, "TTS setLanguage zh result=$lastResult ready=$ready voice=${stableVoice?.name}")
         onReady(ready)
 
         // 不要在 onInit 回调栈里立刻 speak：部分机型首句会合成失败或无声；
@@ -180,12 +199,8 @@ class TtsSpeaker(
         val utteranceId = "notif_${System.nanoTime()}"
         Log.d(tag, "speak utteranceId=$utteranceId text='${text.take(140)}'")
 
-        try {
-            engine.setSpeechRate(1.0f)
-            engine.setPitch(1.0f)
-        } catch (t: Throwable) {
-            Log.w(tag, "reset voice params failed", t)
-        }
+        restoreStableVoice(engine)
+        resetVoiceParams(engine)
 
         if (onDone != null) {
             doneCallbacks[utteranceId] = {
@@ -197,6 +212,33 @@ class TtsSpeaker(
         if (result != TextToSpeech.SUCCESS) {
             Log.w(tag, "speak failed result=$result utteranceId=$utteranceId")
             doneCallbacks.remove(utteranceId)?.invoke()
+        } else {
+            speakCountSinceInit += 1
+        }
+    }
+
+    private fun resetVoiceParams(engine: TextToSpeech) {
+        try {
+            engine.setSpeechRate(1.0f)
+            engine.setPitch(1.0f)
+        } catch (t: Throwable) {
+            Log.w(tag, "reset voice params failed", t)
+        }
+    }
+
+    private fun restoreStableVoice(engine: TextToSpeech) {
+        val voice = stableVoice ?: return
+        try {
+            val current = engine.voice
+            if (current?.name != voice.name) {
+                Log.d(tag, "restore TTS voice from=${current?.name} to=${voice.name}")
+            }
+            val result = engine.setVoice(voice)
+            if (result != TextToSpeech.SUCCESS) {
+                Log.w(tag, "restore TTS voice returned result=$result voice=${voice.name}")
+            }
+        } catch (t: Throwable) {
+            Log.w(tag, "restore TTS voice failed", t)
         }
     }
 
@@ -229,6 +271,8 @@ class TtsSpeaker(
         pendingOnDone = null
         doneCallbacks.clear()
         listenerInstalled = false
+        stableVoice = null
+        speakCountSinceInit = 0
         Log.d(tag, "TTS shutdown")
         // 部分引擎的 onDone 回调早于真实音频结束；此处不要 stop()，避免切断尾音
         engine.shutdown()
@@ -244,5 +288,10 @@ class TtsSpeaker(
         } catch (t: Throwable) {
             Log.w(tag, "TTS stop failed", t)
         }
+    }
+
+    companion object {
+        private const val MAX_SPEAKS_PER_SESSION = 12
+        private const val MAX_SESSION_AGE_MS = 10 * 60 * 1000L
     }
 }

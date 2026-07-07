@@ -332,12 +332,17 @@ class TtsForegroundService : Service() {
             requestDuckingAudioFocus()
             spNow.speak(textToSpeak) {
                 handler.post {
+                    val shouldRefreshSpeaker = spNow === speaker && spNow.shouldRefreshAfterSpeak()
                     isSpeaking = false
                     currentlySpeakingSourcePackage = null
                     speakWatchdog?.let { handler.removeCallbacks(it) }
                     speakWatchdog = null
                     if (queue.isEmpty()) {
                         abandonDuckingAudioFocus()
+                    }
+                    if (shouldRefreshSpeaker) {
+                        Log.d(TAG, "refresh TTS speaker after stable session limit")
+                        rebuildSpeakerIfNeeded(desired = desiredEngineFromPrefs(), force = true)
                     }
                     speakNextIfIdle()
                 }
