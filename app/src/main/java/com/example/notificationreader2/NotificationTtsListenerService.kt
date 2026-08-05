@@ -206,7 +206,8 @@ class NotificationTtsListenerService : NotificationListenerService() {
     }
 
     private fun formatDetailed(appName: String, title: String, detail: String): String {
-        return joinNotBlank(appName, title, detail)
+        val spokenDetail = SpeechTextNormalizer.normalizeIsolatedContent(detail)
+        return joinNotBlank(appName, title, spokenDetail)
     }
 
     private fun formatNewMessageOnly(appName: String): String {
