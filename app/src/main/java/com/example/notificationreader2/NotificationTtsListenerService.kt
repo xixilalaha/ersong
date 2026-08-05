@@ -68,10 +68,22 @@ class NotificationTtsListenerService : NotificationListenerService() {
         if (sbn.packageName == packageName) return
 
         val pkg = sbn.packageName
+        val notification = sbn.notification ?: return
+        val isForegroundService =
+            (notification.flags and Notification.FLAG_FOREGROUND_SERVICE) != 0
         Log.d(
             TAG,
-            "$source raw pkg=$pkg id=${sbn.id} key=${sbn.key.take(80)} ongoing=${sbn.isOngoing} postTime=${sbn.postTime}"
+            "$source raw pkg=$pkg id=${sbn.id} key=${sbn.key.take(80)} ongoing=${sbn.isOngoing} " +
+                "foregroundService=$isForegroundService postTime=${sbn.postTime}"
         )
+
+        // 前台服务通知只表示“应用正在运行”，不是用户收到的新消息。
+        // 不直接过滤所有 ongoing 通知，避免误伤来电等真正需要播报的通知。
+        if (isForegroundService) {
+            Log.d(TAG, "skip foreground-service notification pkg=$pkg id=${sbn.id}")
+            return
+        }
+
         // 记录“确实发过通知”的应用，用于管理列表数据源
         ReadAloudPrefs.rememberKnownPackage(applicationContext, pkg)
         // 已移除的应用，如果之后又真实发出通知，重新出现在底部“通知过的应用”区。
@@ -109,7 +121,6 @@ class NotificationTtsListenerService : NotificationListenerService() {
         }
 
         Log.d(TAG, "processNotification source=$source pkg=${pkg} id=${sbn.id} ongoing=${sbn.isOngoing}")
-        val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
 
         val appName = appNameForPackage(pkg)

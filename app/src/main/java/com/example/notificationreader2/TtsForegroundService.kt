@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -13,6 +14,10 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.session.MediaController
+import android.media.session.MediaSession
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
 import android.telephony.PhoneStateListener
@@ -35,7 +40,15 @@ class TtsForegroundService : Service() {
     private var retryRunnable: Runnable? = null
     private var lastStartId: Int = 0
     private var currentEnginePkg: String? = null
+    private var mediaSession: MediaSession? = null
+    private val externalMediaMonitors = mutableMapOf<MediaSession.Token, ExternalMediaMonitor>()
+    private var externalMediaMonitoringRegistered: Boolean = false
+    private var externalPauseDetectionArmed: Boolean = false
+    private var armExternalPauseDetectionRunnable: Runnable? = null
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+    private val mediaSessionManager by lazy {
+        getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+    }
     private val speechAudioAttributes by lazy {
         AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
@@ -54,6 +67,19 @@ class TtsForegroundService : Service() {
             .build()
     }
     private var hasDuckingAudioFocus: Boolean = false
+    private val mediaSessionCallback = object : MediaSession.Callback() {
+        override fun onPause() {
+            stopFromMediaControl("pause")
+        }
+
+        override fun onStop() {
+            stopFromMediaControl("stop")
+        }
+    }
+    private val activeSessionsChangedListener =
+        MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+            syncExternalMediaControllers(controllers.orEmpty())
+        }
     /** 当前正在朗读的条目所属通知包名（用于接听电话后取消「电话播报」） */
     private var currentlySpeakingSourcePackage: String? = null
     /** API 31+ 为 [TelephonyCallback]；否则为 [PhoneStateListener] */
@@ -87,6 +113,8 @@ class TtsForegroundService : Service() {
         queue.clear()
         isSpeaking = false
         currentlySpeakingSourcePackage = null
+        stopExternalMediaPauseMonitoring()
+        releaseMediaSession()
         abandonDuckingAudioFocus()
         unregisterUserUnlockReceiver()
         unregisterCallStateListener()
@@ -174,6 +202,7 @@ class TtsForegroundService : Service() {
         queue.clear()
         isSpeaking = false
         currentlySpeakingSourcePackage = null
+        deactivateMediaSession()
         speaker?.stopNow()
         abandonDuckingAudioFocus()
         unregisterUserUnlockReceiver()
@@ -273,11 +302,13 @@ class TtsForegroundService : Service() {
             return
         }
         val next = queue.firstOrNull() ?: run {
+            deactivateMediaSession()
             abandonDuckingAudioFocus()
             scheduleStop()
             return
         }
         val sp = speaker ?: run {
+            deactivateMediaSession()
             abandonDuckingAudioFocus()
             scheduleStop()
             return
@@ -325,10 +356,12 @@ class TtsForegroundService : Service() {
                 currentlySpeakingSourcePackage = null
                 speakWatchdog?.let { handler.removeCallbacks(it) }
                 speakWatchdog = null
+                deactivateMediaSession()
                 abandonDuckingAudioFocus()
                 speakNextIfIdle()
                 return@postDelayed
             }
+            activateMediaSessionForPlayback()
             requestDuckingAudioFocus()
             spNow.speak(textToSpeak) {
                 handler.post {
@@ -338,6 +371,7 @@ class TtsForegroundService : Service() {
                     speakWatchdog?.let { handler.removeCallbacks(it) }
                     speakWatchdog = null
                     if (queue.isEmpty()) {
+                        deactivateMediaSession()
                         abandonDuckingAudioFocus()
                     }
                     if (shouldRefreshSpeaker) {
@@ -348,6 +382,185 @@ class TtsForegroundService : Service() {
                 }
             }
         }, 80L)
+    }
+
+    /**
+     * 播报期间临时对外声明为「正在播放」，让耳机暂停键优先交给本服务。
+     * 它不会暂停原来的音乐；停止 TTS 并释放 duck 焦点后，音乐会恢复正常音量。
+     */
+    private fun activateMediaSessionForPlayback() {
+        startExternalMediaPauseMonitoring()
+        val session = mediaSession ?: MediaSession(this, MEDIA_SESSION_TAG).also {
+            it.setCallback(mediaSessionCallback, handler)
+            it.setPlaybackToLocal(speechAudioAttributes)
+            mediaSession = it
+        }
+        session.setPlaybackState(
+            PlaybackState.Builder()
+                .setState(PlaybackState.STATE_PLAYING, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                .setActions(
+                    PlaybackState.ACTION_PAUSE or
+                        PlaybackState.ACTION_PLAY_PAUSE or
+                        PlaybackState.ACTION_STOP
+                )
+                .build()
+        )
+        session.isActive = true
+        Log.d(TAG, "media session activated for TTS")
+    }
+
+    private fun deactivateMediaSession() {
+        stopExternalMediaPauseMonitoring()
+        val session = mediaSession ?: return
+        try {
+            session.setPlaybackState(
+                PlaybackState.Builder()
+                    .setState(PlaybackState.STATE_STOPPED, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 0f)
+                    .setActions(0L)
+                    .build()
+            )
+            session.isActive = false
+            Log.d(TAG, "media session deactivated")
+        } catch (t: Throwable) {
+            Log.w(TAG, "deactivate media session failed", t)
+        }
+    }
+
+    private fun releaseMediaSession() {
+        val session = mediaSession ?: return
+        mediaSession = null
+        try {
+            session.setCallback(null)
+            session.isActive = false
+            session.release()
+            Log.d(TAG, "media session released")
+        } catch (t: Throwable) {
+            Log.w(TAG, "release media session failed", t)
+        }
+    }
+
+    private fun stopFromMediaControl(command: String) {
+        if (!hasPlaybackWork()) {
+            deactivateMediaSession()
+            return
+        }
+        Log.d(TAG, "media control=$command: stop current TTS and clear pending=${queue.size}")
+        stopAllPlaybackAndSelf()
+    }
+
+    /**
+     * 部分定制系统会固定把蓝牙暂停键发给原音乐应用，即使 TTS 的会话已激活。
+     * 此时通过已授权的 NotificationListener 监听原媒体会话：若它在播报期间
+     * 从 PLAYING 变为 PAUSED/STOPPED，就按用户的「停止所有播报」意图处理。
+     */
+    private fun startExternalMediaPauseMonitoring() {
+        if (externalMediaMonitoringRegistered) return
+        val listenerComponent = ComponentName(this, NotificationTtsListenerService::class.java)
+        try {
+            mediaSessionManager.addOnActiveSessionsChangedListener(
+                activeSessionsChangedListener,
+                listenerComponent,
+                handler
+            )
+            externalMediaMonitoringRegistered = true
+            syncExternalMediaControllers(mediaSessionManager.getActiveSessions(listenerComponent))
+
+            externalPauseDetectionArmed = false
+            val arm = Runnable {
+                armExternalPauseDetectionRunnable = null
+                externalPauseDetectionArmed = hasPlaybackWork()
+                Log.d(TAG, "external media pause detection armed=$externalPauseDetectionArmed")
+            }
+            armExternalPauseDetectionRunnable = arm
+            handler.postDelayed(arm, EXTERNAL_PAUSE_ARM_DELAY_MS)
+        } catch (t: Throwable) {
+            Log.w(TAG, "start external media pause monitoring failed", t)
+            stopExternalMediaPauseMonitoring()
+        }
+    }
+
+    private fun syncExternalMediaControllers(controllers: List<MediaController>) {
+        if (!externalMediaMonitoringRegistered) return
+        val externalControllers = controllers
+            .filter { it.packageName != packageName }
+            .associateBy { it.sessionToken }
+
+        val removedTokens = externalMediaMonitors.keys - externalControllers.keys
+        for (token in removedTokens) {
+            externalMediaMonitors.remove(token)?.let { monitor ->
+                try {
+                    monitor.controller.unregisterCallback(monitor.callback)
+                } catch (_: Throwable) {
+                }
+            }
+        }
+
+        for ((token, controller) in externalControllers) {
+            if (externalMediaMonitors.containsKey(token)) continue
+            val callback = object : MediaController.Callback() {
+                override fun onPlaybackStateChanged(state: PlaybackState?) {
+                    onExternalPlaybackStateChanged(token, state?.state ?: PlaybackState.STATE_NONE)
+                }
+            }
+            val monitor = ExternalMediaMonitor(
+                controller = controller,
+                callback = callback,
+                lastPlaybackState = controller.playbackState?.state ?: PlaybackState.STATE_NONE
+            )
+            externalMediaMonitors[token] = monitor
+            try {
+                controller.registerCallback(callback, handler)
+                Log.d(
+                    TAG,
+                    "monitor external media pkg=${controller.packageName} state=${monitor.lastPlaybackState}"
+                )
+            } catch (t: Throwable) {
+                externalMediaMonitors.remove(token)
+                Log.w(TAG, "register external media callback failed pkg=${controller.packageName}", t)
+            }
+        }
+    }
+
+    private fun onExternalPlaybackStateChanged(token: MediaSession.Token, newState: Int) {
+        val monitor = externalMediaMonitors[token] ?: return
+        val oldState = monitor.lastPlaybackState
+        monitor.lastPlaybackState = newState
+        Log.d(
+            TAG,
+            "external media state pkg=${monitor.controller.packageName} $oldState->$newState " +
+                "armed=$externalPauseDetectionArmed"
+        )
+
+        val stoppedByMediaControl =
+            oldState == PlaybackState.STATE_PLAYING &&
+                (newState == PlaybackState.STATE_PAUSED || newState == PlaybackState.STATE_STOPPED)
+        if (externalPauseDetectionArmed && stoppedByMediaControl && hasPlaybackWork()) {
+            Log.d(TAG, "external media paused during TTS: stop current and clear pending=${queue.size}")
+            stopAllPlaybackAndSelf()
+        }
+    }
+
+    private fun stopExternalMediaPauseMonitoring() {
+        armExternalPauseDetectionRunnable?.let { handler.removeCallbacks(it) }
+        armExternalPauseDetectionRunnable = null
+        externalPauseDetectionArmed = false
+
+        if (externalMediaMonitoringRegistered) {
+            try {
+                mediaSessionManager.removeOnActiveSessionsChangedListener(activeSessionsChangedListener)
+            } catch (t: Throwable) {
+                Log.w(TAG, "remove active media sessions listener failed", t)
+            }
+        }
+        externalMediaMonitoringRegistered = false
+
+        for (monitor in externalMediaMonitors.values) {
+            try {
+                monitor.controller.unregisterCallback(monitor.callback)
+            } catch (_: Throwable) {
+            }
+        }
+        externalMediaMonitors.clear()
     }
 
     private fun requestDuckingAudioFocus() {
@@ -489,6 +702,8 @@ class TtsForegroundService : Service() {
     companion object {
         private const val TAG = "NotifTTS_FG"
         private const val CHANNEL_ID = "notif_tts"
+        private const val MEDIA_SESSION_TAG = "NotificationTtsPlayback"
+        private const val EXTERNAL_PAUSE_ARM_DELAY_MS = 400L
         private const val NOTIF_ID = 1001
         private const val MAX_QUEUE_ITEMS = 8
         private const val ACTION_RELOAD_ENGINE = "com.example.notificationreader2.action.RELOAD_ENGINE"
@@ -548,5 +763,11 @@ class TtsForegroundService : Service() {
         val collapseKey: String?,
         val text: String,
         val sourcePackage: String?
+    )
+
+    private data class ExternalMediaMonitor(
+        val controller: MediaController,
+        val callback: MediaController.Callback,
+        var lastPlaybackState: Int
     )
 }
