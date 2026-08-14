@@ -7,11 +7,11 @@ class SpeechTextNormalizerTest {
 
     @Test
     fun normalizesIsolatedDigitsAcrossCommonForms() {
-        assertEquals("数字一", SpeechTextNormalizer.normalizeIsolatedContent("1"))
-        assertEquals("数字一", SpeechTextNormalizer.normalizeIsolatedContent("一"))
-        assertEquals("数字一", SpeechTextNormalizer.normalizeIsolatedContent("壹"))
-        assertEquals("数字六", SpeechTextNormalizer.normalizeIsolatedContent("６"))
-        assertEquals("数字二", SpeechTextNormalizer.normalizeIsolatedContent("貳"))
+        assertEquals("1啊", SpeechTextNormalizer.normalizeIsolatedContent("1"))
+        assertEquals("一啊", SpeechTextNormalizer.normalizeIsolatedContent("一"))
+        assertEquals("壹啊", SpeechTextNormalizer.normalizeIsolatedContent("壹"))
+        assertEquals("６啊", SpeechTextNormalizer.normalizeIsolatedContent("６"))
+        assertEquals("貳啊", SpeechTextNormalizer.normalizeIsolatedContent("貳"))
     }
 
     @Test
@@ -25,7 +25,7 @@ class SpeechTextNormalizerTest {
 
     @Test
     fun trimsButDoesNotRewriteNormalContent() {
-        assertEquals("数字一", SpeechTextNormalizer.normalizeIsolatedContent(" 1 "))
+        assertEquals("1啊", SpeechTextNormalizer.normalizeIsolatedContent(" 1 "))
         assertEquals("文字一", SpeechTextNormalizer.normalizeIsolatedContent("文字一"))
         assertEquals("第一条", SpeechTextNormalizer.normalizeIsolatedContent("第一条"))
         assertEquals("11", SpeechTextNormalizer.normalizeIsolatedContent("11"))
